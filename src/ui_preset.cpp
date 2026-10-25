@@ -41,6 +41,7 @@ const ImU32 kColWarn  = IM_COL32(230, 150, 70, 255);
 
 const char* kBg      = "campaign/town/realm_inventory/realminv_bg.png";
 const char* kIcon    = "campaign/town/realm_inventory/realm_inventory.icon.png";
+const char* kIconGuild = "campaign/town/buildings/guild/guild.skill_levels.icon.png";
 const char* kBtnBase = "campaign/town/realm_inventory/realm_inventory_sort_class.png";
 const char* kBtnSel  = "campaign/town/realm_inventory/realm_inventory_sort_current_overlay.png";
 const char* kClose   = "shared/progression/progression_close.png";
@@ -373,6 +374,8 @@ void DrawBagPanel(const Game::BagState& bag) {
     XF = bag.xf;
     float s = XF.Scale();
     XF.m[4] = std::max(4.0f, bag.xf.m[4] - (kPanelW + kPanelGap) * s);
+    // 배경 테두리가 오른쪽 가방 창과 같은 높이에 오도록 살짝 내림 (배경을 kBgY 에 그리므로 그만큼 보정)
+    XF.m[5] = bag.xf.m[5] - kBgY * s;
 
     ImVec2 p0 = P(0, kBgY), p1 = P(kPanelW, kBgY + kPanelH);
     ImGui::SetNextWindowPos(p0);
@@ -390,7 +393,11 @@ void DrawBagPanel(const Game::BagState& bag) {
     DL->PushClipRect(P(14, 136), P(kPanelW - 14, kBgY + kPanelH - 14), true);
     Image("campaign/town/buildings/nomad_wagon/nomad_wagon.character.png", kPanelW - 660, kBgY + kPanelH - 630, 660, 616, IM_COL32(255, 255, 255, 150));
     DL->PopClipRect();
-    Image(kIcon, kIconX, kIconY);
+    {   // 교관(길드) 숙련도 아이콘 — 없으면 기존 가방 아이콘
+        const Gfx::Texture& bi = Gfx::GameTex(kIconGuild);
+        if (bi.ok()) ImageTex(bi, kIconX, kIconY, 113, 113);
+        else Image(kIcon, kIconX, kIconY);
+    }
     Text(FontId::Title, kTitleX, kTitleY, kColTitle, Txt::T("trinket_title"), true, kCloseX - kTitleX - 12);
     Text(FontId::Body, kSubX, kSubY, kColSub, Txt::T("trinket_sub"), true, kPanelW - kSubX - 24);
 
