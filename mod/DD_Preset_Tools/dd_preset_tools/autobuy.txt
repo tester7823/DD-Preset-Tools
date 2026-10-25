@@ -1,0 +1,30 @@
+# ---------------------------------------------------------------
+#  Auto Buy list  (the [Auto Buy] button on the Provision screen)
+# ---------------------------------------------------------------
+#  Items are bought from top to bottom.
+#  Buying stops as soon as you run out of gold.
+#
+#  Format:   item   amount
+#    - "all" buys everything the store has.
+#    - Lines starting with # are ignored.
+#
+#  Item names:
+#    food  torch  shovel  key  antivenom  bandage  herbs
+#    holy water  laudanum  firewood  dog treats
+#    (game IDs also work: provision, skeleton_key, medicinal_herbs ...)
+#    (items from other mods:  type:id  e.g.  supply:my_item  2)
+#
+#  Items that cost shards are never bought.
+#  Adjust the amounts for your difficulty and dungeon.
+#  Changes apply immediately after saving this file.
+# ---------------------------------------------------------------
+
+food        all
+torch       all
+shovel      4
+key         6
+antivenom   6
+bandage     6
+herbs       6
+holy water  3
+laudanum    3

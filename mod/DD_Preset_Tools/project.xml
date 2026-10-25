@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<project>
+	<PreviewIconFile>preview_icon.png</PreviewIconFile>
+	<ItemDescriptionShort/>
+	<ModDataPath>C:/Program Files (x86)/Steam/steamapps/common/DarkestDungeon/mods/DD_Preset_Tools/</ModDataPath>
+	<Title>DD Preset Tools - Trinket Sets, Party Lineups &amp; Auto Buy</Title>
+	<Language>english</Language>
+	<UpdateDetails/>
+	<Visibility>private</Visibility>
+	<UploadMode>dont_submit</UploadMode>
+	<VersionMajor>0</VersionMajor>
+	<VersionMinor>9</VersionMinor>
+	<TargetBuild>0</TargetBuild>
+	<Tags>
+		<Tags>UI</Tags>
+		<Tags>Gameplay Tweaks</Tags>
+	</Tags>
+	<ItemDescription>[h1]DD Preset Tools[/h1]
+Trinket Sets, Party Lineups and Auto Buy for the town.
+
+[b]One-time setup required:[/b] close the game, open this mod's folder and run [b]dd_preset_tools\install\install.bat[/b].
+It puts a small loader (SDL2.dll) next to Darkest.exe, which loads dd_preset_tools.dll from this mod's folder. Run it again after a game update or "Verify integrity of game files".
+
+[list]
+[*][b]Trinket Sets[/b] - save up to 10 two-trinket sets in the trinket bag and equip them from the hero screen in one click. Class-exclusive trinkets are respected (mod classes too).
+[*][b]Party Lineups[/b] - save up to 10 four-hero lineups on the Estate Map and load them into the party.
+[*][b]Auto Buy[/b] - buy your usual supplies on the Provision screen in one click (edit dd_preset_tools/autobuy.txt).
+[*]Sets and lineups are saved per estate. Enable/disable in the mod list like any other mod.
+[/list]
+
+Source code: https://github.com/kas6215/DD-Preset-Tools
+	</ItemDescription>
+	<PublishedFileId/>
+</project>
