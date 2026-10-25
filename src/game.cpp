@@ -36,6 +36,7 @@ constexpr DWORD RVA_InputModeFlag      = 0x01174ADA;
 constexpr DWORD RVA_RosterShowChar     = 0x006A50B0;  // 영웅 목록 원소의 '정보창 열기' 람다 본체 (캡처 = 원소*)
 constexpr DWORD RVA_GamePersist        = 0x02A5C288;  // persist.game (+0x208 적용된 모드 목록 vector, 원소 0xC0: 이름[0x80], 출처[0x40])
 constexpr DWORD RVA_TownRender         = 0x00411BA0;  // 마을 그리기 (this+0x1F18 = 화면 전환 상태, 3/9 이면 전환 중 검은 화면)
+constexpr DWORD RVA_RenderAll          = 0x00271F40;  // 지연 그리기 목록 전체를 그리는 함수 (자막 함수 바로 뒤에 호출됨)
 constexpr DWORD RVA_DrawElement        = 0x002726F0;  // 지연 그리기 목록의 원소 하나 그리기 (원소+0 = 층. 5 일반 UI, 9 툴팁, 12 확인 창/전환)
 constexpr DWORD RVA_ConfirmShow        = 0x007BA940;  // ConfirmDialog::System::Show (this+0x2C = 나타난 정도)
 constexpr DWORD RVA_ModalRender        = 0x00799D20;  // ModalDialog::Render (확인 창). this+0x5C = 나타난 정도
@@ -76,6 +77,7 @@ const unsigned char kSig_ProvPre[] = { 0x40,0x55,0x53,0x56,0x57,0x41,0x54,0x41,0
 const unsigned char kSig_ProvBuy[] = { 0x8B,0x12,0x48,0x83,0xC1,0x08,0xE9,0x55,0xE5,0xFF,0xFF };
 const unsigned char kSig_Price[]   = { 0x40,0x53,0x48,0x83,0xEC,0x30,0x80,0xBA,0x56,0x01,0x00,0x00,0x00,0x48,0x8B,0xDA };
 const unsigned char kSig_TownRender[] = { 0x48,0x8B,0xC4,0x55,0x53,0x56,0x57,0x41,0x54,0x41,0x55,0x41,0x56,0x41,0x57,0x48,0x8D,0xA8,0x78,0xF3,0xFF,0xFF,0x48,0x81 };
+const unsigned char kSig_RenderAll[] = { 0x53,0x55,0x56,0x57,0x41,0x54,0x41,0x55,0x41,0x56,0x41,0x57,0xB8,0xA8,0x10,0x00,0x00 };
 const unsigned char kSig_DrawElem[] = { 0x48,0x89,0x5C,0x24,0x18,0x55,0x56,0x41,0x56,0x48,0x8D,0x6C,0x24,0xB9,0x48,0x81,0xEC,0xA0,0x00,0x00,0x00,0x48,0x8B,0x05 };
 const unsigned char kSig_Confirm[] = { 0x48,0x89,0x5C,0x24,0x18,0x48,0x89,0x7C,0x24,0x20,0x55,0x48,0x8D,0xAC,0x24,0xC0,0xFC,0xFF,0xFF,0x48,0x81,0xEC,0x40,0x04 };
 const unsigned char kSig_Modal[] = { 0x40,0x55,0x53,0x56,0x57,0x41,0x56,0x41,0x57,0x48,0x8D,0xAC,0x24,0xD8,0xF7,0xFF,0xFF,0x48,0x81,0xEC,0x28,0x09,0x00,0x00 };
@@ -275,13 +277,58 @@ FnSelfOnly o_DrawElem = nullptr;
 bool g_inTopLayer = false;
 bool g_townFadingOut = false;
 bool g_layerDrawn = false;
-unsigned long long g_layerMask = 0, g_layerMaskLogged = ~0ull;
+unsigned long long g_layerMask = 0, g_layerMaskLogged = ~0ull, g_prevLayerMask = 0;
+int g_drawDepth = 0;           // 게임의 층별 그리기 도중인지
+// 게임은 그릴 요소를 배열(RVA 0x1202520, 0x358 바이트씩)에 쌓은 뒤(개수 RVA 0x2A868A4) 한꺼번에 그림.
+// 자막 함수는 화면 UI 를 다 쌓은 뒤에 불리므로, 자막 함수가 쌓기 시작한 위치 직전에 우리 창을 그리면
+// 패널 위·자막 아래가 됨.
+constexpr DWORD RVA_ElemArray = 0x1202520, RVA_ElemCount = 0x2A868A4, kElemSize = 0x358;
+int g_subStart = -1;           // 이번 프레임 자막 요소의 시작 번호 (-1 = 자막 없음)
+bool g_afterSub = false;       // 이번 프레임에 자막 함수가 이미 불렸는지 (그 뒤로 그리는 것은 자막)
+bool g_underSub = false;       // 이번 프레임에 우리 창을 자막(과 게임의 어두운 막) 아래에 그렸는지
+bool g_underSubLast = false;   // 지난 프레임 값
+// 버튼처럼 게임 패널 위에 얹히는 것은 "게임 요소를 다 그린 뒤, 자막 글자 직전"에 따로 그림.
+// 그 위치(이번 프레임의 몇 번째 그리기인지)는 지난 프레임의 그리기 순서로 정함.
+int g_seq = 0;
+// 진단: 자막이 떠 있는 동안 1초에 한 번 그리기 순서를 로그에 남김
+struct SubDiag { int nonSub[16] = {}, sub[16] = {}; int earlySeq = -1, earlyLayer = -1, lateSeq = -1, lateLayer = -1; bool lateAtEnd = false; } g_diag;
+DWORD g_diagLast = 0;
+constexpr int kTextLayer = 7;   // 게임의 글자 그리기(0x276AF0)가 쌓는 층
+void (*g_lateCb)() = nullptr;
 void __fastcall Hook_DrawElem(void* elem) {
     int layer = elem ? *(int*)elem : 0;
     g_layerMask |= 1ull << (layer < 0 ? 0 : layer > 63 ? 63 : layer);
 
-    if (!g_layerDrawn && layer >= kOverlayLayer && g_modalCb) { g_layerDrawn = true; g_inTopLayer = true; g_modalCb(); g_inTopLayer = false; }
+    bool below = layer >= kOverlayLayer;                 // 확인 창(12층)보다 아래
+    // 게임은 화면 전체를 한 번 그린 뒤 자막 함수를 부르고, 자막(어두운 막·글자)을 두 번째로 따로 그림.
+    // → 자막 함수 뒤 첫 요소 = 화면을 다 그린 직후, 자막 직전. 우리 창·버튼을 모두 여기서 그림.
+    bool isSub = g_afterSub && g_subAlpha > 0;
+    if (isSub && !below) {
+        below = true;
+        static bool logged = false;
+        if (!logged) { logged = true; Log("자막 직전(화면을 다 그린 뒤)에 오버레이 그림"); }
+    }
+    int seq = g_seq++;
+    bool lateHere = false;
+    if (g_subAlpha > 0 && layer >= 0 && layer < 16) (isSub ? g_diag.sub : g_diag.nonSub)[layer]++;
+    if (!g_layerDrawn && below && g_modalCb) {
+        g_underSub = layer < kOverlayLayer;
+        if (g_subAlpha > 0) { g_diag.earlySeq = seq; g_diag.earlyLayer = layer; }
+        g_layerDrawn = true; g_inTopLayer = true; g_modalCb(); g_inTopLayer = false;
+    }
+    if (lateHere && g_lateCb && g_diag.lateSeq < 0) { g_diag.lateSeq = seq; g_diag.lateLayer = layer; }
+    if (lateHere && g_lateCb) g_lateCb();      // 이미 그렸으면 아무것도 안 함
+    ++g_drawDepth;
     o_DrawElem(elem);
+    --g_drawDepth;
+}
+
+// 지연 그리기 목록 전체 그리기 — 끝난 직후(게임 요소를 다 그린 뒤)에 떼어 둔 버튼을 그림.
+// 자막이 떠 있고, 위에서 자막 글자 직전 자리를 못 찾았을 때만.
+FnSelfOnly o_RenderAll = nullptr;
+void __fastcall Hook_RenderAll(void* self) {
+    o_RenderAll(self);
+    if (g_lateCb && g_subAlpha > 0) { if (g_diag.lateSeq < 0) g_diag.lateAtEnd = true; g_lateCb(); }
 }
 
 // 자막(내레이션) 그리기: param[0] 상황 번호, param[0x83] 투명도
@@ -292,6 +339,8 @@ void __fastcall Hook_Subtitle(void* self) {
     static bool logged = false;
     if (g_subAlpha > 0 && !logged) { logged = true; Log("자막 감지 (상황 %d)", *p); }
     ++g_subSeen;
+    g_subStart = g_subAlpha > 0 ? *(int*)(g_base + RVA_ElemCount) : -1;
+    if (g_subAlpha > 0) g_afterSub = true;
     o_Subtitle(self);
 }
 
@@ -324,15 +373,41 @@ void NoteSteamFile(const char* name) {
         if (InterlockedExchange(&g_profile, n) != n) Log("세이브 슬롯 감지: profile_%ld (Steam 클라우드)", n);
     }
 }
+// 영지 삭제 감지: 게임이 profile_N 의 persist.game.json 을 지우면 그 슬롯의 조합/편성도 비움 (프레임에서 처리)
+volatile LONG g_deletedSlots = 0;   // 비트마스크 (슬롯 0~31)
+template <class Ch> int SlotOfPath(const Ch* name, const Ch* key, const Ch* prof) {
+    if (!name) return -1;
+    auto find = [](const Ch* h, const Ch* n) -> const Ch* {
+        for (; *h; ++h) { const Ch* a = h; const Ch* b = n; while (*a && *b && (*a | 0x20) == (*b | 0x20)) { ++a; ++b; } if (!*b) return h; }
+        return nullptr; };
+    if (!find(name, key)) return -1;
+    const Ch* p = nullptr;
+    for (const Ch* q = find(name, prof); q; q = find(q + 1, prof))
+        if (q == name || q[-1] == '\\' || q[-1] == '/') p = q;
+    if (!p || p[8] < '0' || p[8] > '9') return -1;
+    int n = 0; for (const Ch* d = p + 8; *d >= '0' && *d <= '9'; ++d) n = n * 10 + (*d - '0');
+    return n;
+}
+void NoteSlotDeleted(int n, const char* how) {
+    if (n < 0 || n > 31) return;
+    InterlockedOr(&g_deletedSlots, 1L << n);
+    Log("영지 삭제 감지: profile_%d (%s) → 이 슬롯의 조합/편성을 비움", n, how);
+}
 using FnRSWrite = bool (__fastcall*)(void*, const char*, const void*, int);
 using FnRSRead  = int (__fastcall*)(void*, const char*, void*, int);
 using FnRSReadAsync = unsigned long long (__fastcall*)(void*, const char*, unsigned, unsigned);
 using FnRSSize  = int (__fastcall*)(void*, const char*);
-FnRSWrite o_RSWrite = nullptr; FnRSRead o_RSRead = nullptr; FnRSReadAsync o_RSReadAsync = nullptr; FnRSSize o_RSSize = nullptr;
+using FnRSDelete = bool (__fastcall*)(void*, const char*);
+FnRSWrite o_RSWrite = nullptr; FnRSRead o_RSRead = nullptr; FnRSReadAsync o_RSReadAsync = nullptr; FnRSSize o_RSSize = nullptr; FnRSDelete o_RSDelete = nullptr;
 bool __fastcall Hook_RSWrite(void* t, const char* n, const void* d, int c) { NoteSteamFile(n); return o_RSWrite(t, n, d, c); }
 int  __fastcall Hook_RSRead(void* t, const char* n, void* d, int c) { NoteSteamFile(n); return o_RSRead(t, n, d, c); }
 unsigned long long __fastcall Hook_RSReadAsync(void* t, const char* n, unsigned o, unsigned c) { NoteSteamFile(n); return o_RSReadAsync(t, n, o, c); }
 int  __fastcall Hook_RSSize(void* t, const char* n) { NoteSteamFile(n); return o_RSSize(t, n); }
+bool __fastcall Hook_RSDelete(void* t, const char* n) {
+    bool r = o_RSDelete(t, n);
+    if (r) NoteSlotDeleted(SlotOfPath<char>(n, "persist.game.json", "profile_"), "Steam");
+    return r;
+}
 
 bool HookSteamStorage() {
     HMODULE sa = GetModuleHandleW(L"steam_api64.dll");
@@ -341,14 +416,15 @@ bool HookSteamStorage() {
     FnGet get = (FnGet)GetProcAddress(sa, "SteamAPI_SteamRemoteStorage_v016");
     void* rs = get ? get() : nullptr;
     if (!rs) return false;
-    void** vt = *(void***)rs;      // FileWrite 0, FileRead 1, FileReadAsync 3, GetFileSize 15
+    void** vt = *(void***)rs;      // FileWrite 0, FileRead 1, FileReadAsync 3, FileDelete 6, GetFileSize 15
     struct { int i; void* d; void** o; } h[] = {
         { 0, (void*)&Hook_RSWrite, (void**)&o_RSWrite }, { 1, (void*)&Hook_RSRead, (void**)&o_RSRead },
-        { 3, (void*)&Hook_RSReadAsync, (void**)&o_RSReadAsync }, { 15, (void*)&Hook_RSSize, (void**)&o_RSSize } };
+        { 3, (void*)&Hook_RSReadAsync, (void**)&o_RSReadAsync }, { 15, (void*)&Hook_RSSize, (void**)&o_RSSize },
+        { 6, (void*)&Hook_RSDelete, (void**)&o_RSDelete } };
     int ok = 0;
     for (auto& e : h)
         if (MH_CreateHook(vt[e.i], e.d, e.o) == MH_OK && MH_EnableHook(vt[e.i]) == MH_OK) ++ok;
-    return ok == 4;
+    return ok >= 4;
 }
 
 void NoteFileOpen(LPCWSTR name) {
@@ -372,6 +448,14 @@ HANDLE WINAPI Hook_CreateFileW(LPCWSTR name, DWORD a, DWORD sm, LPSECURITY_ATTRI
 HANDLE WINAPI Hook_CreateFile2(LPCWSTR name, DWORD a, DWORD sm, DWORD cd, void* ex) {
     NoteFileOpen(name);
     return o_CreateFile2(name, a, sm, cd, ex);
+}
+
+using FnDeleteFileW = BOOL (WINAPI*)(LPCWSTR);
+FnDeleteFileW o_DeleteFileW = nullptr;
+BOOL WINAPI Hook_DeleteFileW(LPCWSTR name) {
+    BOOL r = o_DeleteFileW(name);
+    if (r) NoteSlotDeleted(SlotOfPath<wchar_t>(name, L"persist.game.json", L"profile_"), "local");
+    return r;
 }
 
 bool HookOne(DWORD rva, const unsigned char* sig, size_t n, void* detour, void** orig, const char* name) {
@@ -618,6 +702,7 @@ bool Install() {
         Log("  영웅 정보창 열기: %s", g_showHeroOk ? "OK" : u8"모양이 다름 - 사용 안 함");
     }
     HookOne(RVA_TownRender, kSig_TownRender, sizeof kSig_TownRender, (void*)&Hook_TownRender, (void**)&o_TownRender, "마을 전환");
+    HookOne(RVA_RenderAll, kSig_RenderAll, sizeof kSig_RenderAll, (void*)&Hook_RenderAll, (void**)&o_RenderAll, "그리기 목록");
     HookOne(RVA_DrawElement, kSig_DrawElem, sizeof kSig_DrawElem, (void*)&Hook_DrawElem, (void**)&o_DrawElem, "그리기 층");
     HookOne(RVA_ConfirmShow, kSig_Confirm, sizeof kSig_Confirm, (void*)&Hook_Confirm, (void**)&o_Confirm, "확인 창 2");
     HookOne(RVA_ModalRender, kSig_Modal, sizeof kSig_Modal, (void*)&Hook_Modal, (void**)&o_Modal, "확인 창");
@@ -630,11 +715,21 @@ bool Install() {
     void* cf2 = (void*)GetProcAddress(kb, "CreateFile2");
     bool okW = cf && MH_CreateHook(cf, (void*)&Hook_CreateFileW, (void**)&o_CreateFileW) == MH_OK && MH_EnableHook(cf) == MH_OK;
     bool ok2 = cf2 && MH_CreateHook(cf2, (void*)&Hook_CreateFile2, (void**)&o_CreateFile2) == MH_OK && MH_EnableHook(cf2) == MH_OK;
+    void* df = (void*)GetProcAddress(kb, "DeleteFileW");
+    if (df && MH_CreateHook(df, (void*)&Hook_DeleteFileW, (void**)&o_DeleteFileW) == MH_OK) MH_EnableHook(df);
     bool okS = HookSteamStorage();
     Log("  세이브 슬롯 감지: CreateFileW %s, CreateFile2 %s, Steam 클라우드 %s", okW ? "OK" : u8"실패", ok2 ? "OK" : u8"실패", okS ? "OK" : u8"실패");
     g_ok = a;
     return g_ok;
 #endif
+}
+
+int PopDeletedSlot() {
+    LONG m = g_deletedSlots;
+    if (!m) return -1;
+    for (int i = 0; i < 32; ++i)
+        if (m & (1L << i)) { InterlockedAnd(&g_deletedSlots, ~(1L << i)); return i; }
+    return -1;
 }
 
 void UpdateProvisionBaseline();
@@ -700,6 +795,7 @@ int  CurrentProfile() { return (int)g_profile; }
 const HeroDragState& HeroDrag() { return g_hdrag; }
 const PartyState& Party() { return g_party; }
 float SubtitleAlpha() { return g_subAlpha; }
+bool  UnderSubtitle() { return g_underSub; }
 float ScreenVisibility() { return g_screenVis; }
 bool TownTransition() {
     // 3/9 = 전환 중. 2초 넘게 계속되면 전환이 아니라고 보고 무시 (버튼이 영영 안 보이는 일 방지)
@@ -982,16 +1078,33 @@ bool ShowHeroInfo(int guid) {
 }
 float ModalAmount() { return g_modal; }
 void SetModalRenderCallback(void (*cb)()) { g_modalCb = cb; }
+void SetLateRenderCallback(void (*cb)()) { g_lateCb = cb; }
 void NewGameFrame() {
     g_layerDrawn = false;
+    if (g_subAlpha > 0 && GetTickCount() - g_diagLast > 1000) {
+        g_diagLast = GetTickCount();
+        char b[400]; int n = snprintf(b, sizeof b, "[자막 진단] 시작번호 %d, 층별 일반/자막:", g_subStart);
+        for (int i = 0; i < 16; ++i) if (g_diag.nonSub[i] || g_diag.sub[i]) n += snprintf(b + n, sizeof b - n, " %d층 %d/%d", i, g_diag.nonSub[i], g_diag.sub[i]);
+        n += snprintf(b + n, sizeof b - n, " | 창: %d번째(%d층) | 버튼: %s %d(%d층) | 자막아래 %d",
+                      g_diag.earlySeq, g_diag.earlyLayer, g_diag.lateAtEnd ? "목록 끝" : "자막 글자 앞", g_diag.lateSeq, g_diag.lateLayer, (int)g_underSub);
+        Log("%s", b);
+    }
+    g_diag = SubDiag{};
+    g_afterSub = false;
+    g_underSubLast = g_underSub;
+    g_underSub = false;
+    g_seq = 0;
     if (g_layerMask && g_layerMask != g_layerMaskLogged) {
         g_layerMaskLogged = g_layerMask;
         char buf[200] = {}; int n = 0;
         for (int i = 0; i < 64; ++i) if (g_layerMask & (1ull << i)) n += snprintf(buf + n, sizeof buf - n, "%d ", i);
         Log("그리기 층: %s", buf);
     }
+    g_prevLayerMask = g_layerMask;
     g_layerMask = 0;
 }
+// 확인 창·양초(ESC) 메뉴 같은 맨 위 층(12 이상)이 지난 프레임에 그려졌는지
+bool TopMenuOpen() { return (g_prevLayerMask >> kOverlayLayer) != 0; }
 
 // ---- 영웅 ----
 BYTE* RosterSys() { BYTE* c = Campaign(); return c ? c + (AltMode() ? 0x728 : 0) : nullptr; }

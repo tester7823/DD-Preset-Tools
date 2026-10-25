@@ -85,10 +85,16 @@ void ImageTex(const Gfx::Texture& t, float x, float y, float w, float h, ImU32 t
 void Image(const char* rel, float x, float y, float w = -1, float h = -1, ImU32 tint = IM_COL32_WHITE) {
     ImageTex(Gfx::GameTex(rel), x, y, w, h, tint);
 }
-void Text(FontId f, float x, float y, ImU32 col, const char* s, bool shadow = true) {
-    if (shadow) Gfx::DrawTextShadow(DL, f, P(x, y), S(), col, s);
-    else        Gfx::DrawStr(DL, f, P(x, y), S(), col, s);
+void Text(FontId f, float x, float y, ImU32 col, const char* s, bool shadow = true, float maxW = 0) {
+    // maxW 보다 길면 글자를 줄여서 칸 안에 맞춤 (긴 번역문이 삐져나가지 않게)
+    float k = 1.0f;
+    if (maxW > 0) { float w = Gfx::MeasureText(f, s, 1.0f).x; if (w > maxW) k = std::max(0.55f, maxW / w); }
+    if (k < 1.0f) y += Gfx::FontLineHeight(f) * (1.0f - k) * 0.5f;
+    if (shadow) Gfx::DrawTextShadow(DL, f, P(x, y), S() * k, col, s);
+    else        Gfx::DrawStr(DL, f, P(x, y), S() * k, col, s);
 }
+// 줄인 뒤의 너비 (가운데 정렬용)
+float TextWFit(FontId f, const char* s, float maxW) { float w = Gfx::MeasureText(f, s, 1.0f).x; return (maxW > 0 && w > maxW) ? std::max(w * 0.55f, maxW) : w; }
 float TextW(FontId f, const char* s) { return Gfx::MeasureText(f, s, 1.0f).x; }
 
 // ---- 효과음 (게임과 같은 소리) ----
@@ -141,17 +147,19 @@ void Tooltip(const char* title, const char* body, ImU32 bodyCol = 0) {
 }
 
 // 정렬 버튼 모양의 프리셋 버튼 (게임 버튼 틀 + 장신구 칸 두 개 그림)
-void DrawPresetIcon(float x, float y, bool hovered, bool active) {
-    Image(kBtnBase, x, y);
-    DL->AddRectFilled(P(x + 5, y + 5), P(x + 27, y + 27), IM_COL32(0, 0, 0, 255));
+void DrawPresetIcon(float x, float y, bool hovered, bool active, float sz = 32) {
+    float k = sz / 32.0f;      // 32 기준 그림을 sz 크기로
+    auto Q = [&](float a, float b) { return P(x + a * k, y + b * k); };
+    Image(kBtnBase, x, y, sz, sz);
+    DL->AddRectFilled(Q(5, 5), Q(27, 27), IM_COL32(0, 0, 0, 255));
     ImU32 c = hovered ? IM_COL32(255, 245, 220, 255) : IM_COL32(205, 205, 205, 255);
-    float t = 1.6f * S();
-    DL->AddRect(P(x + 8.5f, y + 8.5f),  P(x + 15.0f, y + 23.5f), c, 0, 0, t);
-    DL->AddRect(P(x + 17.0f, y + 8.5f), P(x + 23.5f, y + 23.5f), c, 0, 0, t);
-    DL->AddCircleFilled(P(x + 11.75f, y + 13.0f), 1.6f * S(), c);
-    DL->AddCircleFilled(P(x + 20.25f, y + 13.0f), 1.6f * S(), c);
-    if (hovered) DL->AddRectFilled(P(x + 2, y + 2), P(x + 30, y + 30), IM_COL32(255, 230, 170, 28));
-    if (active) Image(kBtnSel, x - 8, y - 8);
+    float t = 1.6f * S() * k;
+    DL->AddRect(Q(8.5f, 8.5f),  Q(15.0f, 23.5f), c, 0, 0, t);
+    DL->AddRect(Q(17.0f, 8.5f), Q(23.5f, 23.5f), c, 0, 0, t);
+    DL->AddCircleFilled(Q(11.75f, 13.0f), 1.6f * S() * k, c);
+    DL->AddCircleFilled(Q(20.25f, 13.0f), 1.6f * S() * k, c);
+    if (hovered) DL->AddRectFilled(Q(2, 2), Q(30, 30), IM_COL32(255, 230, 170, 28));
+    if (active) { const Gfx::Texture& t = Gfx::GameTex(kBtnSel); if (t.ok()) Image(kBtnSel, x - 8 * k, y - 8 * k, t.w * k, t.h * k); }
 }
 
 bool TextButton(const char* id, const char* label, float x, float y, float w, float h, bool enabled = true, bool highlight = false) {
@@ -161,9 +169,9 @@ bool TextButton(const char* id, const char* label, float x, float y, float w, fl
     ImU32 border = !enabled ? IM_COL32(60, 55, 45, 255) : (hov || highlight) ? IM_COL32(205, 170, 100, 255) : IM_COL32(100, 82, 52, 255);
     DL->AddRectFilled(P(x, y), P(x + w, y + h), fill);
     DL->AddRect(P(x, y), P(x + w, y + h), border, 0, 0, (highlight ? 2.0f : 1.5f) * S());
-    float tw = TextW(FontId::Body, label);
+    float tw = TextWFit(FontId::Body, label, w - 8);
     Text(FontId::Body, x + (w - tw) * 0.5f, y + (h - Gfx::FontLineHeight(FontId::Body)) * 0.5f + 1,
-         enabled ? (hov ? IM_COL32(255, 240, 200, 255) : kColText) : kColDim, label, false);
+         enabled ? (hov ? IM_COL32(255, 240, 200, 255) : kColText) : kColDim, label, false, w - 8);
     return clicked;
 }
 
@@ -329,8 +337,8 @@ void DrawCard(int i, float x, float y) {
             Snd(kSndClick);
         }
         Text(FontId::Body, nx, y + 7, d.name[0] ? (nameHov ? IM_COL32(240, 220, 150, 255) : kColTitle) : kColDim,
-             d.name[0] ? d.name : Txt::T("empty_set"));
-        if (g_dirty[i]) { const char* t = Txt::T("unsaved"); Text(FontId::Body, x + kCardW - 10 - TextW(FontId::Body, t), y + 7, kColWarn, t); }
+             d.name[0] ? d.name : Txt::T("empty_set"), true, (x + kCardW - 10 - (g_dirty[i] ? TextWFit(FontId::Body, Txt::T("unsaved"), 90) + 8 : 0)) - nx);
+        if (g_dirty[i]) { const char* t = Txt::T("unsaved"); Text(FontId::Body, x + kCardW - 10 - TextWFit(FontId::Body, t, 90), y + 7, kColWarn, t, true, 90); }
         if (nameHov && !Game::Drag().active) Tooltip(Txt::T("rename"), Txt::T("rename_set_body"));
     }
 
@@ -383,8 +391,8 @@ void DrawBagPanel(const Game::BagState& bag) {
     Image("campaign/town/buildings/nomad_wagon/nomad_wagon.character.png", kPanelW - 660, kBgY + kPanelH - 630, 660, 616, IM_COL32(255, 255, 255, 150));
     DL->PopClipRect();
     Image(kIcon, kIconX, kIconY);
-    Text(FontId::Title, kTitleX, kTitleY, kColTitle, Txt::T("trinket_title"));
-    Text(FontId::Body, kSubX, kSubY, kColSub, Txt::T("trinket_sub"));
+    Text(FontId::Title, kTitleX, kTitleY, kColTitle, Txt::T("trinket_title"), true, kCloseX - kTitleX - 12);
+    Text(FontId::Body, kSubX, kSubY, kColSub, Txt::T("trinket_sub"), true, kPanelW - kSubX - 24);
 
     bool hov = false;
     if (HitButton("##preset_close", kCloseX, kCloseY, kBtn, kBtn, &hov)) { g_open = false; Snd(kSndClose); }
@@ -420,8 +428,8 @@ void DrawBagPanel(const Game::BagState& bag) {
     if (g_toastTime > 0) {
         g_toastTime -= ImGui::GetIO().DeltaTime;
         float a = std::min(1.0f, g_toastTime / 0.5f);
-        float tw = TextW(FontId::Body, g_toast);
-        Text(FontId::Body, (kPanelW - tw) * 0.5f, 158, IM_COL32(220, 200, 150, (int)(255 * a)), g_toast);
+        float tw = TextWFit(FontId::Body, g_toast, kPanelW - 40);
+        Text(FontId::Body, (kPanelW - tw) * 0.5f, 158, IM_COL32(220, 200, 150, (int)(255 * a)), g_toast, true, kPanelW - 40);
     }
 
     // 끌고 있는 장신구 그림: 프리셋 창 위에서는 게임이 그린 그림이 창에 가려지므로 맨 위에 다시 그림
@@ -464,7 +472,7 @@ void DrawBagButton(const Game::BagState& bag) {
     DrawPresetIcon(bp.x, bp.y, hov, g_open);
     // 자막이 뜨면 게임의 정렬 버튼들처럼 어둡게 (투명이 아니라 색을 어둡게)
     static float dim = 0;
-    float target = Game::SubtitleAlpha() > 0 ? 1.0f : 0.0f, step = ImGui::GetIO().DeltaTime * 4.0f;
+    float target = (Game::SubtitleAlpha() > 0 && !Game::UnderSubtitle()) ? 1.0f : 0.0f, step = ImGui::GetIO().DeltaTime * 4.0f;
     dim = dim < target ? std::min(target, dim + step) : std::max(target, dim - step);
     if (dim > 0) {
         float k = 1.0f - 0.55f * dim;
@@ -485,9 +493,11 @@ constexpr float kPickW = 320, kPickRowH = 56, kPickHeadH = 40, kPickPad = 10;
 
 void DrawHeroPicker(const Game::HeroPanelState& hp) {
     XF = hp.xf;
-    // 버튼: 색상 버튼 그림 바로 위
-    float bx = hp.anchor.x - 2, by = hp.anchor.y - 40;
-    ImVec2 p0 = P(bx, by), p1 = P(bx + kBtn, by + kBtn);
+    // 버튼: 색상(염색) 버튼 바로 위, 같은 크기·같은 왼쪽 선에 맞춤
+    const Gfx::Texture& rc = Gfx::GameTex("shared/character/icon_recolor.png");
+    float bs = rc.ok() && rc.w == rc.h && rc.w > 8 && rc.w < 80 ? (float)rc.w : kBtn;
+    float bx = hp.anchor.x, by = hp.anchor.y - bs - 8;
+    ImVec2 p0 = P(bx, by), p1 = P(bx + bs, by + bs);
     ImGui::SetNextWindowPos(p0);
     ImGui::SetNextWindowSize(ImVec2(p1.x - p0.x, p1.y - p0.y));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
@@ -497,14 +507,14 @@ void DrawHeroPicker(const Game::HeroPanelState& hp) {
                  ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoFocusOnAppearing);
     DL = ImGui::GetWindowDrawList();
     bool hov = false;
-    if (HitButton("##hero_open", bx, by, kBtn, kBtn, &hov)) {
+    if (HitButton("##hero_open", bx, by, bs, bs, &hov)) {
         g_pickOpen = !g_pickOpen;
         g_pickHero = hp.hero;
         Snd(g_pickOpen ? kSndPageOpen : kSndPageClose);
         g_pickMsg[0] = 0;
         if (g_pickOpen && Game::InTown()) PruneMissing();
     }
-    DrawPresetIcon(bx, by, hov, g_pickOpen);
+    DrawPresetIcon(bx, by, hov, g_pickOpen, bs);
     if (hov) Tooltip(Txt::T("load_title"), Game::InTown() ? Txt::T("load_body") : Txt::T("town_only"));
     ImGui::End();
     ImGui::PopStyleVar(2);
@@ -530,7 +540,7 @@ void DrawHeroPicker(const Game::HeroPanelState& hp) {
     DL->AddRectFilled(w0, w1, IM_COL32(10, 8, 6, 245));
     DL->AddRect(w0, w1, IM_COL32(140, 115, 70, 255), 0, 0, 2.0f * S());
     DL->AddRect(P(wx + 4, wy + 4), P(wx + kPickW - 4, wy + h - 4), IM_COL32(70, 58, 38, 255), 0, 0, 1.0f * S());
-    Text(FontId::Body, wx + 14, wy + 11, kColTitle, Txt::T("picker_title"));
+    Text(FontId::Body, wx + 14, wy + 11, kColTitle, Txt::T("picker_title"), true, kPickW - 56);
     if (HitButton("##pick_close", wx + kPickW - 34, wy + 8, 24, 24, &hov)) { g_pickOpen = false; Snd(kSndPageClose); }
     Image(kClose, wx + kPickW - 34, wy + 8, 24, 24, hov ? IM_COL32_WHITE : IM_COL32(220, 220, 220, 255));
 
@@ -555,7 +565,7 @@ void DrawHeroPicker(const Game::HeroPanelState& hp) {
         char num[8]; snprintf(num, sizeof num, "%d", i + 1);
         Text(FontId::Body, rx + 8, y + 14, kColDim, num, false);
         const char* nm = p.name[0] ? p.name : (has ? Txt::T("no_name") : Txt::T("empty_set"));
-        Text(FontId::Body, rx + 42, y + 14, has ? (rh && enabled ? IM_COL32(255, 235, 170, 255) : kColTitle) : kColDim, nm, false);
+        Text(FontId::Body, rx + 42, y + 14, has ? (rh && enabled ? IM_COL32(255, 235, 170, 255) : kColTitle) : kColDim, nm, false, rw - 42 - 68);
         // 장신구 미니 그림 2개
         float iw = 24, ih = 48, ix = rx + rw - (iw * 2 + 10);
         for (int s = 0; s < 2; ++s)
@@ -588,9 +598,9 @@ void DrawHeroPicker(const Game::HeroPanelState& hp) {
     }
     if (g_pickMsgTime > 0 && g_pickMsg[0]) {
         g_pickMsgTime -= ImGui::GetIO().DeltaTime;
-        Text(FontId::Body, wx + 14, y + 4, g_pickMsgWarn ? kColWarn : IM_COL32(150, 210, 130, 255), g_pickMsg, false);
+        Text(FontId::Body, wx + 14, y + 4, g_pickMsgWarn ? kColWarn : IM_COL32(150, 210, 130, 255), g_pickMsg, false, kPickW - 28);
     } else if (!town) {
-        Text(FontId::Body, wx + 14, y + 4, kColWarn, Txt::T("town_only_load"), false);
+        Text(FontId::Body, wx + 14, y + 4, kColWarn, Txt::T("town_only_load"), false, kPickW - 28);
     }
     ImGui::End();
     ImGui::PopStyleVar(2);

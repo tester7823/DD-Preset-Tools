@@ -64,6 +64,7 @@ struct HeroInfo {
     int status = 0;                  // 0 대기, 1 파티, 3 사망/제외, 4·8 행방불명, 그 외 활동 중
     bool Available() const { return status == 0 || status == 1; }
     bool Missing() const { return status == 4 || status == 8; }
+    bool Dead() const { return status == 3; }       // 게임 코드: 사망 시 상태를 3 으로 설정
 };
 
 void BeginFrame();
@@ -73,11 +74,13 @@ const DragState&      Drag();
 const HeroDragState&  HeroDrag();
 const PartyState&     Party();
 float SubtitleAlpha();
+bool  UnderSubtitle();     // 지금 우리 창을 자막 아래(게임이 화면을 어둡게 하는 막 아래)에 그리는 중인지
 float ScreenVisibility();   // 화면 전환 중 0 (검은 화면) ~ 1. 어두워지기 시작하면 빠르게 0
 float ModalAmount();
 bool  TownTransition();     // 마을 화면 전환 중 (검은 화면으로 넘어가는 중)
 bool  QuestSelectVisible();
 bool  TopLayerActive();
+bool  TopMenuOpen();      // 확인 창·양초(ESC) 메뉴 등 맨 위 층이 떠 있는지
 bool  TownFadingOut();
 std::string Localize(const std::string& key);   // 게임 번역 (없으면 빈 문자열)
 bool  ModEnabled();         // 모드 목록(파란 망치)에서 이 모드가 켜져 있는지. 꺼져 있으면 모든 기능 숨김
@@ -89,8 +92,10 @@ bool  AutoBuyAvailable();
 std::string BuyPlanText();   // "식량 전부, 횃불 전부, 삽 4개, ..." (확인 창 표시용)   // 원정 준비 화면을 연 뒤 아직 아무것도 담지 않았는지 (기본 지급품 제외)
 bool  ShowHeroInfo(int guid);   // 영웅 정보창 열기 (영웅 목록 우클릭과 같은 동작)   // 상점 왼쪽→오른쪽 순서로 골드 아이템을 전부 구매 (골드가 모자라면 그 시점에서 중단)      // 마을 화면이 검은 화면으로 넘어가는 중     // 게임이 맨 위층(확인 창/화면 전환)을 그리는 중에 오버레이를 그리고 있음 // 영지 지도(원정 준비 전 단계)가 이번 프레임에 보였는지        // 게임의 확인 창이 떠 있으면 0보다 큼
 void  SetModalRenderCallback(void (*cb)());   // 게임이 확인 창/전환 층을 그리기 직전에 호출
+void  SetLateRenderCallback(void (*cb)());    // 자막이 있을 때: 게임 요소를 다 그린 뒤, 자막 글자 직전
 void  NewGameFrame();                         // 화면 넘기기(Swap) 때마다   // 확인 창을 그리기 직전에 호출      // 화면에 자막이 떠 있으면 0보다 큼 (버튼이 자막을 가리지 않도록)
 bool InTown();
+int  PopDeletedSlot();       // 게임에서 삭제된 영지 슬롯 번호 (없으면 -1). 한 번 꺼내면 지워짐
 int  CurrentProfile();      // 게임이 불러온 세이브 슬롯 번호 (profile_N), 모르면 -1
 
 // ---- 장신구 정보 ----

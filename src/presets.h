@@ -11,6 +11,7 @@ namespace Presets {
     void    Load();
     void    SetProfile(int profile);   // 영지(세이브 슬롯 profile_N) 바뀔 때. 이전 것은 저장 후 새 파일 로드
     int     Profile();                 // -1 = 모름
+    void    ResetProfile(int profile);   // 영지 삭제 시: 그 슬롯의 저장 파일을 .deleted 로 치우고 비움
     void    SaveIfDirty();
     void    MarkDirty();
     Preset& Get(int i);

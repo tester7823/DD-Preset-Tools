@@ -53,7 +53,12 @@ void Image(const char* rel, float x, float y, float w, float h, ImU32 tint = IM_
     const Gfx::Texture& t = Gfx::GameTex(rel);
     if (t.ok()) DL->AddImage(t.tex(), P(x, y), P(x + w, y + h), ImVec2(0, 0), ImVec2(1, 1), tint);
 }
-void Text(float x, float y, ImU32 col, const char* s) { Gfx::DrawTextShadow(DL, FontId::Body, P(x, y), S(), col, s); }
+void Text(float x, float y, ImU32 col, const char* s, float maxW = 0) {
+    float k = 1.0f;   // maxW 보다 길면 줄여서 맞춤 (긴 번역문)
+    if (maxW > 0) { float w = Gfx::MeasureText(FontId::Body, s, 1.0f).x; if (w > maxW) k = std::max(0.6f, maxW / w); }
+    if (k < 1.0f) y += Gfx::FontLineHeight(FontId::Body) * (1.0f - k) * 0.5f;
+    Gfx::DrawTextShadow(DL, FontId::Body, P(x, y), S() * k, col, s);
+}
 float TextW(const char* s) { return Gfx::MeasureText(FontId::Body, s, 1.0f).x; }
 
 void ScaleAlpha(ImDrawList* dl, int from, float a) {
@@ -148,7 +153,8 @@ void DrawDialog() {
     for (size_t i = 0; i < lines.size(); ++i) {
         ImU32 col = i == 0 ? kColText : i < planEnd ? kColTitle : i == planEnd ? kColSub : kColWarn;
         if (i == 1 || i == planEnd) ly += 10;
-        Text(cx - TextW(lines[i].c_str()) * 0.5f, ly, col, lines[i].c_str());
+        float lw = std::min(TextW(lines[i].c_str()), 620.0f);
+        Text(cx - lw * 0.5f, ly, col, lines[i].c_str(), 620);
         ly += 27;
     }
 

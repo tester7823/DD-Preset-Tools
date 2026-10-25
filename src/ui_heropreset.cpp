@@ -104,11 +104,17 @@ void ImageTex(const Gfx::Texture& t, float x, float y, float w, float h, ImU32 t
 void Image(const char* rel, float x, float y, float w = -1, float h = -1, ImU32 tint = IM_COL32_WHITE) {
     ImageTex(Gfx::GameTex(rel), x, y, w, h, tint);
 }
-void Text(FontId f, float x, float y, ImU32 col, const char* s, bool shadow = true) {
+void Text(FontId f, float x, float y, ImU32 col, const char* s, bool shadow = true, float maxW = 0) {
     col = A(col);
-    if (shadow) Gfx::DrawTextShadow(DL, f, P(x, y), S(), col, s);
-    else        Gfx::DrawStr(DL, f, P(x, y), S(), col, s);
+    // maxW 보다 길면 글자를 줄여서 칸 안에 맞춤 (긴 번역문이 삐져나가지 않게)
+    float k = 1.0f;
+    if (maxW > 0) { float w = Gfx::MeasureText(f, s, 1.0f).x; if (w > maxW) k = std::max(0.55f, maxW / w); }
+    if (k < 1.0f) y += Gfx::FontLineHeight(f) * (1.0f - k) * 0.5f;
+    if (shadow) Gfx::DrawTextShadow(DL, f, P(x, y), S() * k, col, s);
+    else        Gfx::DrawStr(DL, f, P(x, y), S() * k, col, s);
 }
+// 줄인 뒤의 너비 (가운데 정렬용)
+float TextWFit(FontId f, const char* s, float maxW) { float w = Gfx::MeasureText(f, s, 1.0f).x; return (maxW > 0 && w > maxW) ? std::max(w * 0.55f, maxW) : w; }
 float TextW(FontId f, const char* s) { return Gfx::MeasureText(f, s, 1.0f).x; }
 bool Hover(float x, float y, float w, float h) { return ImGui::IsMouseHoveringRect(P(x, y), P(x + w, y + h), false); }
 
@@ -151,9 +157,9 @@ bool TextButton(const char* id, const char* label, float x, float y, float w, fl
     ImU32 border = !enabled ? IM_COL32(60, 55, 45, 255) : (hov || highlight) ? IM_COL32(205, 170, 100, 255) : IM_COL32(100, 82, 52, 255);
     DL->AddRectFilled(P(x, y), P(x + w, y + h), fill);
     DL->AddRect(P(x, y), P(x + w, y + h), border, 0, 0, (highlight ? 2.0f : 1.5f) * S());
-    float tw = TextW(FontId::Body, label);
+    float tw = TextWFit(FontId::Body, label, w - 8);
     Text(FontId::Body, x + (w - tw) * 0.5f, y + (h - Gfx::FontLineHeight(FontId::Body)) * 0.5f + 1,
-         enabled ? (hov ? IM_COL32(255, 240, 200, 255) : kColText) : kColDim, label, false);
+         enabled ? (hov ? IM_COL32(255, 240, 200, 255) : kColText) : kColDim, label, false, w - 8);
     if (clicked && !enabled) Snd(kSndInvalid);
     return clicked && enabled;
 }
@@ -180,7 +186,7 @@ void DrawButler(float x, float y, float size, bool hovered, bool active) {
 enum class HeroState { Empty, Ok, Missing, Busy, Gone };
 HeroState StateOf(int guid, Game::HeroInfo* info) {
     if (guid < 0) return HeroState::Empty;
-    if (!Game::GetHero(guid, info)) return HeroState::Gone;
+    if (!Game::GetHero(guid, info) || info->Dead()) return HeroState::Gone;
     if (info->Available()) return HeroState::Ok;
     return info->Missing() ? HeroState::Missing : HeroState::Busy;
 }
@@ -236,12 +242,12 @@ void PruneDead() {
         for (int s = 0; s < 4; ++s) {
             Game::HeroInfo h;
             HeroPresets::Preset& p = HeroPresets::Get(i);
-            if (p.guid[s] >= 0 && !Game::GetHero(p.guid[s], &h)) {
-                Log("영웅 프리셋 %d: 사라진 영웅 제거 (guid %d)", i + 1, p.guid[s]);
+            if (p.guid[s] >= 0 && (!Game::GetHero(p.guid[s], &h) || h.Dead())) {
+                Log("영웅 프리셋 %d: 죽거나 사라진 영웅 제거 (guid %d)", i + 1, p.guid[s]);
                 p.guid[s] = -1; ++removed; HeroPresets::MarkDirty();
             }
             int& d = g_draft[i].guid[s];
-            if (d >= 0 && !Game::GetHero(d, &h)) d = -1;
+            if (d >= 0 && (!Game::GetHero(d, &h) || h.Dead())) d = -1;
         }
     if (removed) {
         Toast(Txt::F("removed_heroes", { Txt::Num(removed) }).c_str(), true);
@@ -372,14 +378,14 @@ void DrawCard(int i, float x, float y) {
     std::string why;
     bool usable = Usable(HeroPresets::Get(i), &why);
     char line[64];
-    if (g_dirty[i]) Text(FontId::Body, x + 12, y + 44, kColWarn, Txt::T("unsaved"));
-    else if (count == 0) Text(FontId::Body, x + 12, y + 44, kColDim, Txt::T("no_heroes"));
+    if (g_dirty[i]) Text(FontId::Body, x + 12, y + 44, kColWarn, Txt::T("unsaved"), true, kSlotX - 18);
+    else if (count == 0) Text(FontId::Body, x + 12, y + 44, kColDim, Txt::T("no_heroes"), true, kSlotX - 18);
     else {
         snprintf(line, sizeof line, "%s", Txt::F("hero_count", { Txt::Num(count) }).c_str());
-        Text(FontId::Body, x + 12, y + 44, kColSub, line);
+        Text(FontId::Body, x + 12, y + 44, kColSub, line, true, kSlotX - 18);
     }
     if (!g_dirty[i] && count > 0)
-        Text(FontId::Body, x + 12, y + 72, usable ? kColOk : kColWarn, usable ? Txt::T("st_ok") : Txt::T("not_ready"));
+        Text(FontId::Body, x + 12, y + 72, usable ? kColOk : kColWarn, usable ? Txt::T("st_ok") : Txt::T("not_ready"), true, kSlotX - 18);
 
     for (int c = 0; c < 4; ++c) DrawSlot(i, c, x + kSlotX + c * kSlotPitch, y + (kCardH - kSlotSize) * 0.5f);
 
@@ -454,8 +460,8 @@ void DrawPanel(const Game::Xform& anchorXf, float leftScreenX, float slotScreenY
     // 아이콘: 장신구 가방 아이콘과 같은 틀에 집사 초상화
     Image("campaign/town/realm_inventory/realm_inventory.icon.png", kIconX, kIconY, kIconSize, kIconSize);
     Image(kButler, kIconX + 9, kIconY + 9, kIconSize - 18, kIconSize - 18);
-    Text(FontId::Title, kTitleX, kTitleY, kColTitle, Txt::T("party_title"));
-    Text(FontId::Body, kSubX, kSubY, kColSub, Txt::T("party_sub"));
+    Text(FontId::Title, kTitleX, kTitleY, kColTitle, Txt::T("party_title"), true, kCloseX - kTitleX - 12);
+    Text(FontId::Body, kSubX, kSubY, kColSub, Txt::T("party_sub"), true, kPanelW - kSubX - 24);
 
     bool hov = false;
     if (HitButton("##hp_close", kCloseX, kCloseY, kBtn, kBtn, &hov)) { g_open = false; g_editing = -1; Snd(kSndClose); }
@@ -490,9 +496,9 @@ void DrawPanel(const Game::Xform& anchorXf, float leftScreenX, float slotScreenY
     if (g_toastTime > 0) {
         g_toastTime -= ImGui::GetIO().DeltaTime;
         float a = std::min(1.0f, g_toastTime / 0.5f);
-        float tw = TextW(FontId::Body, g_toast);
+        float tw = TextWFit(FontId::Body, g_toast, kPanelW - 40);
         ImU32 c = g_toastWarn ? IM_COL32(230, 150, 70, (int)(255 * a)) : IM_COL32(220, 200, 150, (int)(255 * a));
-        Text(FontId::Body, (kPanelW - tw) * 0.5f, 156, c, g_toast);
+        Text(FontId::Body, (kPanelW - tw) * 0.5f, 156, c, g_toast, true, kPanelW - 40);
     }
 
     // 프리셋 안에서 자리 바꾸기: 끄는 그림 + 놓기
@@ -594,7 +600,7 @@ void Draw() {
     g_alpha = vis;
     // 자막이 뜨면 버튼이 자막을 가리지 않도록 잠시 숨김 (창이 열려 있을 때는 그대로)
     static float subHide = 0;
-    float target = (Game::SubtitleAlpha() > 0 && !g_open) ? 1.0f : 0.0f;
+    float target = (Game::SubtitleAlpha() > 0 && !g_open && !Game::UnderSubtitle()) ? 1.0f : 0.0f;   // 자막 아래에 그려지면 게임이 어둡게 해 줌
     float step = dt * 4.0f;
     subHide = subHide < target ? std::min(target, subHide + step) : std::max(target, subHide - step);
     g_alpha = std::min(g_alpha, 1.0f - subHide);

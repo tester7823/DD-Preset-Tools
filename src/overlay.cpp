@@ -17,6 +17,7 @@
 #include "overlay.h"
 #include "presets.h"
 #include "game.h"
+#include "hero_presets.h"
 #include "gfx.h"
 #include "ui_preset.h"
 #include "ui_heropreset.h"
@@ -111,8 +112,7 @@ bool Init(SDL_Window* window) {
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO();
-    static std::string ini = WToUtf8(ModDir() + L"\\trinket_preset_imgui.ini");
-    io.IniFilename = ini.c_str();
+    io.IniFilename = nullptr;     // 창 위치는 코드가 정하므로 설정 파일을 만들지 않음
     io.ConfigFlags |= ImGuiConfigFlags_NoMouseCursorChange;   // 게임 커서를 건드리지 않음
     ApplyStyle();
     LoadFonts();
@@ -188,9 +188,18 @@ void ScaleAlpha(ImDrawData* dd, float a) {
         }
 }
 
+ImDrawData g_lateData;
+ImVector<ImDrawList*> g_lateLists;
+bool g_latePending = false;
+
 void RenderUI(bool atSwap) {
     Game::BeginFrame();
     Txt::NewFrame();
+    // 게임에서 영지를 삭제했으면 그 슬롯의 조합/편성도 비움 (같은 슬롯에 새로 시작해도 깨끗하게)
+    for (int slot = Game::PopDeletedSlot(); slot >= 0; slot = Game::PopDeletedSlot()) {
+        Presets::ResetProfile(slot);
+        HeroPresets::ResetProfile(slot);
+    }
     GLint prevFB = 0;
     if (atSwap && p_glBindFramebuffer) { glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prevFB); p_glBindFramebuffer(GL_FRAMEBUFFER, 0); }
 
@@ -215,11 +224,47 @@ void RenderUI(bool atSwap) {
     float a = Game::ScreenVisibility();
     if (atSwap && g_earlyBroken && Game::ModalAmount() > 0) a *= 1.0f - std::min(1.0f, Game::ModalAmount());   // 대체: 확인 창 위로 올라오지 않게 숨김
     ScaleAlpha(ImGui::GetDrawData(), a);
+    // 자막 아래에 그리는 중이면: 게임 패널 위에 얹히는 버튼·툴팁은 따로 떼어 나중(게임 요소 다 그린 뒤, 자막 글자 직전)에 그림
+    g_lateData.Clear(); g_lateLists.clear(); g_latePending = false;
+    if (false) {   // (예전 방식: 버튼만 따로 떼어 그리기 — 지금은 자막 직전 한 번에 그림)
+        ImDrawData* dd = ImGui::GetDrawData();
+        ImVector<ImDrawList*> keep;
+        for (ImDrawList* l : dd->CmdLists) {
+            const char* n = l->_OwnerName ? l->_OwnerName : "";
+            bool late = !strcmp(n, "##preset_btn") || !strcmp(n, "##hero_preset_btn") || !strcmp(n, "##hero_preset_btn2") ||
+                        !strcmp(n, "##bulk_btn") || !strcmp(n, "##Foreground") || !strncmp(n, "##Tooltip", 9);
+            (late ? g_lateLists : keep).push_back(l);
+        }
+        if (!g_lateLists.empty()) {
+            dd->CmdLists = keep; dd->CmdListsCount = keep.Size;
+            dd->TotalVtxCount = dd->TotalIdxCount = 0;
+            for (ImDrawList* l : keep) { dd->TotalVtxCount += l->VtxBuffer.Size; dd->TotalIdxCount += l->IdxBuffer.Size; }
+            g_lateData.Valid = true; g_lateData.DisplayPos = dd->DisplayPos; g_lateData.DisplaySize = dd->DisplaySize;
+            g_lateData.FramebufferScale = dd->FramebufferScale; g_lateData.OwnerViewport = dd->OwnerViewport;
+            g_lateData.CmdLists = g_lateLists; g_lateData.CmdListsCount = g_lateLists.Size;
+            for (ImDrawList* l : g_lateLists) { g_lateData.TotalVtxCount += l->VtxBuffer.Size; g_lateData.TotalIdxCount += l->IdxBuffer.Size; }
+            g_latePending = true;
+        }
+    }
     if (g_backend == Backend::GL3) ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
     else                           ImGui_ImplOpenGL2_RenderDrawData(ImGui::GetDrawData());
 
     if (atSwap && p_glBindFramebuffer) p_glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)prevFB);
 }
+
+// 떼어 둔 버튼을 그림 (atSwap = 프레임 끝에서 대신 그릴 때)
+void RenderLate(bool atSwap) {
+    if (!g_latePending) return;
+    g_latePending = false;
+    GLint prevFB = 0;
+    if (atSwap && p_glBindFramebuffer) { glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prevFB); p_glBindFramebuffer(GL_FRAMEBUFFER, 0); }
+    if (g_backend == Backend::GL3) ImGui_ImplOpenGL3_RenderDrawData(&g_lateData);
+    else                           ImGui_ImplOpenGL2_RenderDrawData(&g_lateData);
+    if (atSwap && p_glBindFramebuffer) p_glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)prevFB);
+    static bool logged = false;
+    if (!logged) { logged = true; Log(atSwap ? "버튼을 프레임 끝에 그림 (자막 글자 위치 못 찾음)" : "버튼을 자막 글자 직전에 그림"); }
+}
+void RenderLateCb() { RenderLate(false); }
 
 // 게임이 확인 창을 그리기 직전 (게임 화면 위, 확인 창 아래)
 void RenderBeforeModal() {
@@ -254,9 +299,10 @@ void OnFrame(SDL_Window* window) {
         }
     }
     ++g_frames;
-    if (g_frames == 1) { Game::Install(); Game::SetModalRenderCallback(&RenderBeforeModal); }
+    if (g_frames == 1) { Game::Install(); Game::SetModalRenderCallback(&RenderBeforeModal); Game::SetLateRenderCallback(&RenderLateCb); }
     if (g_earlyDone) g_earlyDone = false;     // 이미 게임 화면 안(확인 창 아래)에 그렸음
     else RenderUI(true);
+    RenderLate(true);                          // 자막 글자 직전에 못 그렸으면 여기서
     Game::NewGameFrame();
     Presets::SaveIfDirty();
 }
@@ -268,7 +314,7 @@ bool OnEvent(SDL_Event* ev) {
     }
     if (!g_ready) return false;
     // 확인 창이 떠 있거나 화면 전환 중이면 마우스는 전부 게임으로 (오버레이 버튼이 눌리지 않게)
-    if ((Game::ModalAmount() > 0 || Game::ScreenVisibility() < 0.5f) &&
+    if ((Game::ModalAmount() > 0 || Game::TopMenuOpen() || Game::ScreenVisibility() < 0.5f) &&
         (ev->type == SDL_MOUSEMOTION || ev->type == SDL_MOUSEBUTTONDOWN || ev->type == SDL_MOUSEBUTTONUP || ev->type == SDL_MOUSEWHEEL)) {
         ImGui::GetIO().AddMousePosEvent(-FLT_MAX, -FLT_MAX);
         return false;

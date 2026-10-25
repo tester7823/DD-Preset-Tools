@@ -36,7 +36,7 @@ must be placed next to the game executable once.
 
 Files in this folder
 --------------------
-  dd_preset_tools.dll             The mod's code (source: https://github.com/kas6215/DD-Preset-Tools)
+  dd_preset_tools.dll             The mod's code (source: https://github.com/tester7823/DD-Preset-Tools)
   install\                        Loader installer (SDL2.dll, install.bat, uninstall.bat)
   autobuy.txt                     Auto Buy list - edit freely
   images\hero_icon.png            Party Lineups icon (Caretaker)
@@ -50,10 +50,10 @@ Notes
 -----
   * Some antivirus programs may flag the DLL files because they hook into the
     game. The full source code is available on GitHub:
-    https://github.com/kas6215/DD-Preset-Tools
+    https://github.com/tester7823/DD-Preset-Tools
   * Translations: the text comes from the mod's localization folder
-    (localization\dd_preset_tools.string_table.xml, keys ddpt_*). Included:
-    English, Korean, Simplified Chinese, Japanese, Russian
-    (Traditional Chinese: see localization_tchinese\README.txt).
-    Other languages show English. To translate, build .loc2 files from the xml
-    with the game's localization tool and publish them as your own mod.
+    (localization\dd_preset_tools.string_table.xml, keys ddpt_*). All 12 game
+    languages are included: English, French, German, Spanish, Brazilian
+    Portuguese, Russian, Polish, Czech, Italian, Simplified Chinese, Korean,
+    Japanese. To fix a translation, edit tools/strings.py on GitHub and send
+    a pull request.

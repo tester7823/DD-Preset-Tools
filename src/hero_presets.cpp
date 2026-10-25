@@ -40,7 +40,7 @@ namespace {
     }
     void WriteNow() {
         g_dirty = false;
-        if (g_profile == -2) return;
+        if (g_profile < 0) return;      // 영지를 모를 때는 파일에 쓰지 않음 (다른 영지로 섞이지 않게)
         std::wstring tmp = FilePath() + L".tmp";
         FILE* f = _wfopen(tmp.c_str(), L"wb");
         if (!f) { Log("영웅 프리셋 저장 실패"); return; }
@@ -59,16 +59,16 @@ void SetProfile(int profile) {
     if (g_dirty) WriteNow();
     g_profile = profile;
     int n = ReadNow();
-    std::wstring unk = ModDir() + L"\\hero_presets_unknown.txt";
-    if (profile >= 0 && GetFileAttributesW(FilePath().c_str()) == INVALID_FILE_ATTRIBUTES &&
-        GetFileAttributesW(unk.c_str()) != INVALID_FILE_ATTRIBUTES) {
-        // 영지를 모를 때 만든 프리셋은 처음 확인된 영지로 옮김
-        int saved = g_profile; g_profile = -1; n = ReadNow(); g_profile = saved;
-        WriteNow();
-        MoveFileExW(unk.c_str(), (unk + L".migrated").c_str(), MOVEFILE_REPLACE_EXISTING);
-        Log("영지 미확인 영웅 프리셋을 profile_%d 로 옮김", profile);
-    }
     Log("영지 profile_%d 영웅 프리셋 %d개 로드", profile, n);
+}
+
+void ResetProfile(int profile) {
+    if (profile < 0) return;
+    std::wstring path = ModDir() + L"\\hero_presets_profile_" + std::to_wstring(profile) + L".txt";
+    if (GetFileAttributesW(path.c_str()) != INVALID_FILE_ATTRIBUTES)
+        MoveFileExW(path.c_str(), (path + L".deleted").c_str(), MOVEFILE_REPLACE_EXISTING);
+    if (profile == g_profile) { for (auto& p : g_p) p = Preset{}; g_dirty = false; }
+    Log("profile_%d 원정대 편성 비움", profile);
 }
 
 void SaveIfDirty() {

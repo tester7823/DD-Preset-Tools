@@ -15,7 +15,6 @@ namespace {
     DWORD  g_dirtySince = 0;
     int    g_profile = -1;          // -1 = 아직 모름
 
-    std::wstring LegacyPath() { return ModDir() + L"\\trinket_presets.txt"; }
     std::wstring FilePath() {
         if (g_profile < 0) return ModDir() + L"\\trinket_presets_unknown.txt";
         return ModDir() + L"\\trinket_presets_profile_" + std::to_wstring(g_profile) + L".txt";
@@ -52,6 +51,7 @@ namespace {
     }
 
     void WriteNow() {
+        if (g_profile < 0) { g_dirty = false; return; }   // 영지를 모를 때는 파일에 쓰지 않음
         std::wstring tmp = FilePath() + L".tmp";
         FILE* f = _wfopen(tmp.c_str(), L"wb");
         if (!f) { Log("프리셋 저장 실패"); g_dirty = false; return; }
@@ -77,22 +77,16 @@ void SetProfile(int profile) {
     if (g_dirty) WriteNow();                    // 이전 영지 프리셋을 먼저 저장
     g_profile = profile;
     int n = ReadFile(FilePath());
-    std::wstring unk = ModDir() + L"\\trinket_presets_unknown.txt";
-    if (n < 0 && profile >= 0 && GetFileAttributesW(unk.c_str()) != INVALID_FILE_ATTRIBUTES) {
-        // 영지 감지가 안 되던 동안(v0.6~0.7) 저장된 프리셋을 이 영지로 옮김
-        n = ReadFile(unk);
-        WriteNow();
-        MoveFileExW(unk.c_str(), (unk + L".migrated").c_str(), MOVEFILE_REPLACE_EXISTING);
-        Log("영지 미확인 프리셋을 profile_%d 로 옮김", profile);
-    }
-    if (n < 0 && profile >= 0 && GetFileAttributesW(LegacyPath().c_str()) != INVALID_FILE_ATTRIBUTES) {
-        // v0.5 이전의 공용 파일은 처음 연 영지로 옮김 (한 번만)
-        n = ReadFile(LegacyPath());
-        WriteNow();
-        MoveFileExW(LegacyPath().c_str(), (LegacyPath() + L".migrated").c_str(), MOVEFILE_REPLACE_EXISTING);
-        Log("기존 공용 프리셋을 profile_%d 로 옮김", profile);
-    }
     Log("영지 profile_%d 프리셋 %d개 로드", profile, n < 0 ? 0 : n);
+}
+
+void ResetProfile(int profile) {
+    if (profile < 0) return;
+    std::wstring path = ModDir() + L"\\trinket_presets_profile_" + std::to_wstring(profile) + L".txt";
+    if (GetFileAttributesW(path.c_str()) != INVALID_FILE_ATTRIBUTES)
+        MoveFileExW(path.c_str(), (path + L".deleted").c_str(), MOVEFILE_REPLACE_EXISTING);
+    if (profile == g_profile) { for (auto& p : g_presets) p = Preset{}; g_dirty = false; }
+    Log("profile_%d 장신구 조합 비움", profile);
 }
 
 void SaveIfDirty() {

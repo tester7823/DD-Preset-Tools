@@ -110,6 +110,8 @@ bool AppendFnt(Font& f, const char* relFnt) {
     std::string dir = relFnt; dir = dir.substr(0, dir.find_last_of('/') + 1);
     int pageBase = (int)f.pages.size();
     float sw = 1, sh = 1;
+    struct Raw { uint32_t cp; int x, y; };
+    std::vector<Raw> raws;     // 글자 위치(픽셀) — 페이지 그림의 실제 크기로 나중에 정규화
     size_t pos = 0;
     while (pos < txt.size()) {
         size_t e = txt.find('\n', pos); if (e == std::string::npos) e = txt.size();
@@ -131,9 +133,18 @@ bool AppendFnt(Font& f, const char* relFnt) {
             g.xo = (short)KV(line.c_str(), "xoffset"); g.yo = (short)KV(line.c_str(), "yoffset");
             g.adv = (short)KV(line.c_str(), "xadvance");
             g.page = (unsigned short)(pageBase + KV(line.c_str(), "page"));
-            g.u0 = x / sw; g.v0 = y / sh; g.u1 = (x + g.w) / sw; g.v1 = (y + g.h) / sh;
-            f.glyphs[(uint32_t)KV(line.c_str(), "id")] = g;
+            uint32_t cp = (uint32_t)KV(line.c_str(), "id");
+            f.glyphs[cp] = g;
+            raws.push_back({ cp, x, y });
         }
+    }
+    // .fnt 의 scaleW/scaleH 가 실제 그림 크기와 다른 파일이 있음 (dwarvenaxe-l: scaleW=1024, 그림 512)
+    // → 실제로 읽은 그림 크기를 우선 사용
+    for (const Raw& r : raws) {
+        Glyph& g = f.glyphs[r.cp];
+        float w = sw, h = sh;
+        if (g.page < f.pages.size() && f.pages[g.page].w > 0) { w = (float)f.pages[g.page].w; h = (float)f.pages[g.page].h; }
+        g.u0 = r.x / w; g.v0 = r.y / h; g.u1 = (r.x + g.w) / w; g.v1 = (r.y + g.h) / h;
     }
     return true;
 }
