@@ -1,3 +1,4 @@
+#include <cfloat>
 // 게임 그림/폰트 로더 + ImGui 그리기
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
@@ -235,7 +236,7 @@ const Texture& GameTex(const char* rel) {
 }
 
 #ifdef GFX_HARNESS
-const std::wstring& ToolRoot() { static std::wstring s; return s; }
+const std::wstring& ToolRoot() { static std::wstring s = getenv("DDPT_ROOT") ? std::wstring_convert<std::codecvt_utf8<wchar_t>>().from_bytes(getenv("DDPT_ROOT")) : std::wstring(); return s; }
 #else
 // 이 모드의 데이터 폴더: mods\<아무 이름>\dd_preset_tools 또는 창작마당\<번호>\dd_preset_tools
 const std::wstring& ToolRoot() {
@@ -335,6 +336,19 @@ void SetFontLanguage(const std::string& lang) {
 bool FontAvailable(FontId id) { return GetFont(id).loaded; }
 float FontLineHeight(FontId id) { return GetFont(id).lineHeight; }
 
+// 게임 폰트에 없는 글자(예: 영어 게임에서 한글로 지은 이름)는 ImGui 폰트(맑은 고딕)로 대신 그림
+static ImFont* FallbackFont(uint32_t cp) {
+    ImFont* f = ImGui::GetFont();
+    if (!f || cp > 0xFFFF) return nullptr;
+    return f->FindGlyphNoFallback((ImWchar)cp) ? f : nullptr;
+}
+static void CpToUtf8(char* u, uint32_t c) {
+    if (c < 0x80) { u[0] = (char)c; }
+    else if (c < 0x800) { u[0] = (char)(0xC0 | (c >> 6)); u[1] = (char)(0x80 | (c & 0x3F)); }
+    else { u[0] = (char)(0xE0 | (c >> 12)); u[1] = (char)(0x80 | ((c >> 6) & 0x3F)); u[2] = (char)(0x80 | (c & 0x3F)); }
+}
+static float FallbackSize(const Font& f, float scale) { return f.lineHeight * scale * 1.1f; }
+
 ImVec2 MeasureText(FontId id, const char* s, float scale) {
     Font& f = GetFont(id);
     float x = 0;
@@ -343,6 +357,11 @@ ImVec2 MeasureText(FontId id, const char* s, float scale) {
         auto it = f.glyphs.find(cp);
         if (it != f.glyphs.end()) x += it->second.adv;
         else if (cp == ' ') x += f.lineHeight * 0.3f;
+        else if (ImFont* ff = FallbackFont(cp)) {
+            ImWchar c = (ImWchar)cp;
+            char u[5] = {}; CpToUtf8(u, c);
+            x += ff->CalcTextSizeA(FallbackSize(f, 1.0f), FLT_MAX, 0, u).x;
+        }
     }
     return ImVec2(x * scale, f.lineHeight * scale);
 }
@@ -357,7 +376,16 @@ void DrawStr(ImDrawList* dl, FontId id, ImVec2 pos, float scale, ImU32 col, cons
     while (*s) {
         uint32_t cp = NextCp(s);
         auto it = f.glyphs.find(cp);
-        if (it == f.glyphs.end()) { if (cp == ' ') x += f.lineHeight * 0.3f * scale; continue; }
+        if (it == f.glyphs.end()) {
+            if (cp == ' ') { x += f.lineHeight * 0.3f * scale; continue; }
+            if (ImFont* ff = FallbackFont(cp)) {
+                char u[5] = {}; CpToUtf8(u, cp);
+                float fs = FallbackSize(f, scale);
+                dl->AddText(ff, fs, ImVec2(x, pos.y + (f.lineHeight * scale - fs) * 0.5f), col, u);
+                x += ff->CalcTextSizeA(fs, FLT_MAX, 0, u).x;
+            }
+            continue;
+        }
         const Glyph& g = it->second;
         if (g.w > 0 && g.page < f.pages.size() && f.pages[g.page].ok()) {
             ImVec2 p0(x + g.xo * scale, pos.y + g.yo * scale);

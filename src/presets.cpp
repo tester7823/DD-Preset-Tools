@@ -94,4 +94,6 @@ void SaveIfDirty() {
     WriteNow();
 }
 
+void Flush() { if (g_dirty) WriteNow(); }   // 게임 종료 직전: 0.5초 기다리지 않고 바로 저장
+
 } // namespace Presets

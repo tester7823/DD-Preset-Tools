@@ -364,12 +364,16 @@ void DrawCard(int i, float x, float y) {
             snprintf(g_editBuf, sizeof g_editBuf, "%s", d.name);
             Snd(kSndClick);
         }
-        // 이름이 길면 칸 안에서 자름
+        // 이름이 길면 먼저 글자를 줄여 맞추고, 그래도 넘치면 끝을 ".." 으로 자름
         std::string nm = d.name[0] ? d.name : Txt::T("empty_lineup");
-        while (nm.size() > 1 && TextW(FontId::Body, nm.c_str()) > nw) {
-            size_t k = nm.size() - 1; while (k > 0 && (nm[k] & 0xC0) == 0x80) --k; nm.resize(k);
+        const float lim = nw / 0.7f;
+        if (TextW(FontId::Body, nm.c_str()) > lim) {
+            while (nm.size() > 1 && TextW(FontId::Body, (nm + "..").c_str()) > lim) {
+                size_t k = nm.size() - 1; while (k > 0 && (nm[k] & 0xC0) == 0x80) --k; nm.resize(k);
+            }
+            nm += "..";
         }
-        Text(FontId::Body, nx, y + 8, d.name[0] ? (nameHov ? IM_COL32(240, 220, 150, 255) : kColTitle) : kColDim, nm.c_str());
+        Text(FontId::Body, nx, y + 8, d.name[0] ? (nameHov ? IM_COL32(240, 220, 150, 255) : kColTitle) : kColDim, nm.c_str(), true, nw);
         if (nameHov && !Game::HeroDrag().active) Tooltip(Txt::T("rename"), Txt::T("rename_lineup_body"));
     }
 

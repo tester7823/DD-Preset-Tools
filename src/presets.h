@@ -13,6 +13,7 @@ namespace Presets {
     int     Profile();                 // -1 = 모름
     void    ResetProfile(int profile);   // 영지 삭제 시: 그 슬롯의 저장 파일을 .deleted 로 치우고 비움
     void    SaveIfDirty();
+    void    Flush();
     void    MarkDirty();
     Preset& Get(int i);
 }

@@ -345,6 +345,7 @@ bool OnEvent(SDL_Event* ev) {
 }
 
 void OnContextDestroyed(SDL_GLContext ctx) {
+    Presets::Flush(); HeroPresets::Flush();   // 게임을 닫을 때 방금 고친 내용도 저장
     if (g_ready && ctx == g_context) Shutdown();
 }
 
