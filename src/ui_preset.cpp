@@ -395,7 +395,7 @@ void DrawBagPanel(const Game::BagState& bag) {
     DL->PopClipRect();
     {   // 교관(길드) 숙련도 아이콘 — 없으면 기존 가방 아이콘
         const Gfx::Texture& bi = Gfx::GameTex(kIconGuild);
-        if (bi.ok()) ImageTex(bi, kIconX, kIconY, 113, 113);
+        if (bi.ok()) ImageTex(bi, kIconX + 6, kIconY + 6, 101, 101);   // 가방 아이콘의 테두리 안쪽 크기에 맞춤
         else Image(kIcon, kIconX, kIconY);
     }
     Text(FontId::Title, kTitleX, kTitleY, kColTitle, Txt::T("trinket_title"), true, kCloseX - kTitleX - 12);

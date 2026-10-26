@@ -82,6 +82,7 @@ bool  QuestSelectVisible();
 bool  TopLayerActive();
 bool  TopMenuOpen();      // 확인 창·양초(ESC) 메뉴 등 맨 위 층이 떠 있는지
 bool  TownFadingOut();
+std::string SteamLanguage();   // Steam 게임 언어 ("koreana" 등, 모르면 빈 문자열)
 std::string Localize(const std::string& key);   // 게임 번역 (없으면 빈 문자열)
 bool  ModEnabled();         // 모드 목록(파란 망치)에서 이 모드가 켜져 있는지. 꺼져 있으면 모든 기능 숨김
 bool  ProvisionVisible();   // 원정 준비(상점) 화면이 보이는지

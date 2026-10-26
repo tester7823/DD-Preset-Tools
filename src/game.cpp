@@ -643,7 +643,27 @@ std::string LocalizeImpl(const std::string& key) {
     if (!out.s || !out.s[0]) return {};
     std::string r(out.s, strnlen(out.s, 512));
     if (r == key) return {};
+    if (r.find("[<" + key + ">]") != std::string::npos) return {};   // 게임의 "번역 없음" 표시 (<c>a$~~B[<키>]</c>)
     return r;
+}
+
+// Steam 게임 언어 ("koreana", "english", ...) — 다키스트 던전은 이 언어를 씀
+std::string SteamLanguageImpl() {
+    static std::string lang; static bool done = false;
+    if (done) return lang;
+    HMODULE sa = GetModuleHandleW(L"steam_api64.dll");
+    if (!sa) return lang;
+    using FnApps = void* (__cdecl*)();
+    using FnLang = const char* (__cdecl*)(void*);
+    FnApps apps = (FnApps)GetProcAddress(sa, "SteamAPI_SteamApps_v008");
+    FnLang gl = (FnLang)GetProcAddress(sa, "SteamAPI_ISteamApps_GetCurrentGameLanguage");
+    void* a = apps ? apps() : nullptr;
+    if (!a || !gl) return lang;
+    const char* l = gl(a);
+    done = true;
+    if (l) lang = l;
+    Log("Steam 게임 언어: %s", lang.c_str());
+    return lang;
 }
 
 uint32_t HashImpl(const char* s) { uint32_t h = 0; while (*s) h = h * 0x35 + (unsigned char)*s++; return h; }
@@ -811,6 +831,7 @@ bool TopLayerActive() { return g_inTopLayer; }
 bool TownFadingOut() { return g_townFadingOut; }
 
 std::string Localize(const std::string& key) { return g_ok ? LocalizeImpl(key) : std::string(); }
+std::string SteamLanguage() { return SteamLanguageImpl(); }
 
 // 이 모드가 현재 영지(세이브)의 모드 목록에서 켜져 있는지
 bool ModEnabled() {

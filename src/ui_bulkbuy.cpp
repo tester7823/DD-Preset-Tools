@@ -126,8 +126,10 @@ void DrawDialog() {
     DL = ImGui::GetWindowDrawList();
     int v0 = DL->VtxBuffer.Size;
     DL->AddRectFilled(ImVec2(0, 0), ds, IM_COL32(0, 0, 0, 150));          // 뒤 화면 어둡게
-    float bx = 960 - 420, by = 200;
-    Image(kDlgBg, bx, by, 840, 600);
+    // 글이 많아서 게임 기본 확인 창보다 조금(15%) 크게
+    constexpr float k = 1.15f;
+    float bx = 960 - 420 * k, by = 540 - 300 * k - 40;
+    Image(kDlgBg, bx, by, 840 * k, 600 * k);
 
     // 질문 + 구매 목록(설정 파일 내용) 자동 줄바꿈
     std::vector<std::string> lines;
@@ -139,7 +141,7 @@ void DrawDialog() {
             size_t e = plan.find(", ", pos); if (e == std::string::npos) e = plan.size();
             std::string tok = plan.substr(pos, e - pos);
             std::string trial = cur.empty() ? tok : cur + ", " + tok;
-            if (!cur.empty() && TextW(trial.c_str()) > 560) { lines.push_back(cur + ","); cur = tok; }
+            if (!cur.empty() && TextW(trial.c_str()) > 640) { lines.push_back(cur + ","); cur = tok; }
             else cur = trial;
             pos = e + 2;
         }
@@ -149,12 +151,12 @@ void DrawDialog() {
     size_t planEnd = lines.size();
     lines.push_back(Txt::T("ab_gold_note"));
     lines.push_back(Txt::T("ab_adjust"));
-    float cx = 960 - 18, ly = by + 178;
+    float cx = bx + 402 * k, ly = by + 182 * k;
     for (size_t i = 0; i < lines.size(); ++i) {
         ImU32 col = i == 0 ? kColText : i < planEnd ? kColTitle : i == planEnd ? kColSub : kColWarn;
         if (i == 1 || i == planEnd) ly += 10;
-        float lw = std::min(TextW(lines[i].c_str()), 620.0f);
-        Text(cx - lw * 0.5f, ly, col, lines[i].c_str(), 620);
+        float lw = std::min(TextW(lines[i].c_str()), 700.0f);
+        Text(cx - lw * 0.5f, ly, col, lines[i].c_str(), 700);
         ly += 27;
     }
 
@@ -163,17 +165,19 @@ void DrawDialog() {
     g_hoverAns = -1;
     int clicked = -1;
     for (int i = 0; i < 2; ++i) {
-        float ax = 960 - 12 - 250, ay = by + 390 - 20 + i * 55 - 19;
+        // 답은 글 바로 아래에 여유를 두고 (창 아래 테두리는 넘지 않게)
+        float ay0 = std::min(std::max(by + 345 * k, ly + 24), by + 490 * k - 100);
+        float ax = cx - 250, ay = ay0 + i * 55;
         ImGui::SetCursorScreenPos(P(ax, ay));
         char id[16]; snprintf(id, sizeof id, "##ans%d", i);
         if (ImGui::InvisibleButton(id, ImVec2(500 * s, 38 * s))) clicked = i;
         bool hv = ImGui::IsItemHovered();
         if (hv) {
             g_hoverAns = i;
-            Image(kDlgSel, 960 - 12 - 233, ay + 19 - 40, 466, 81);
+            Image(kDlgSel, cx - 233, ay + 19 - 40, 466, 81);
         }
         float tw = TextW(ans[i]);
-        Text(960 - 12 - tw * 0.5f, ay + 19 - Gfx::FontLineHeight(FontId::Body) * 0.5f,
+        Text(cx - tw * 0.5f, ay + 19 - Gfx::FontLineHeight(FontId::Body) * 0.5f,
              hv ? IM_COL32(255, 240, 200, 255) : kColText, ans[i]);
     }
     if (g_hoverAns >= 0 && g_hoverAns != g_hoverAnsPrev) Game::PlaySound(kSndHover);
