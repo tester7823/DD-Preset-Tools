@@ -33,6 +33,19 @@ constexpr int   kCols = 2, kVisibleRows = 3;
 constexpr float kUpX = 590, kUpY = 150, kDownX = 589, kDownY = 713;
 constexpr float kSlotScale = 0.82f;
 
+// 장신구 칸 수에 따라 바뀌는 배치 (기본 2칸: 카드 2열 / 3칸 이상: 넓은 카드 1열)
+int   g_slots = 2, g_cols = kCols;
+float g_cardW = kCardW, g_slotScale = kSlotScale;
+void UpdateLayout() {
+    g_slots = std::clamp(Game::TrinketSlots(), 1, Presets::kMaxSlots);
+    if (g_slots <= 2) { g_cols = kCols; g_cardW = kCardW; g_slotScale = kSlotScale; return; }
+    g_cols = 1;
+    g_cardW = kCardW * 2 + kCardGapX;
+    float avail = g_cardW - 12 - 132;                       // 오른쪽 저장/비우기 버튼 자리 빼고
+    float per = std::min(72 * kSlotScale + 8, avail / g_slots);
+    g_slotScale = std::min(kSlotScale, (per - 8) / 72);
+}
+
 const ImU32 kColTitle = IM_COL32(200, 180, 110, 255);
 const ImU32 kColSub   = IM_COL32(174, 172, 162, 255);
 const ImU32 kColDim   = IM_COL32(120, 115, 105, 255);
@@ -214,7 +227,7 @@ void PruneMissing() {
     if (!ok) return;
     int removed = 0;
     for (int i = 0; i < Presets::kCount; ++i) {
-        for (int s = 0; s < 2; ++s) {
+        for (int s = 0; s < Presets::kMaxSlots; ++s) {
             Presets::Preset& p = Presets::Get(i);
             if (p.trinket[s][0] && owned.find(Game::Hash(p.trinket[s])) == owned.end()) {
                 Log("프리셋 %d: 더 이상 없는 장신구 제거 (%s)", i + 1, p.trinket[s]);
@@ -240,16 +253,21 @@ void LoadDrafts() {
 int DropConflict(int card, int slot) {
     const Game::DragState& drag = Game::Drag();
     if (!drag.active || !drag.isTrinket) return 0;
-    const char* other = g_draft[card].trinket[1 - slot];
-    if (!other[0]) return 0;
-    if (Game::Hash(other) == drag.hash) return 2;
-    return Game::ClassesCompatible(Game::Trinket(drag.hash), Game::TrinketById(other)) ? 0 : 1;
+    int kind = 0;
+    for (int s = 0; s < g_slots; ++s) {
+        if (s == slot) continue;
+        const char* other = g_draft[card].trinket[s];
+        if (!other[0]) continue;
+        if (Game::Hash(other) == drag.hash) return 2;
+        if (!Game::ClassesCompatible(Game::Trinket(drag.hash), Game::TrinketById(other))) kind = 1;
+    }
+    return kind;
 }
 
 void DrawSlot(int card, int slot, float x, float y) {
     Presets::Preset& d = g_draft[card];
     const char* id = d.trinket[slot];
-    float w = 72 * kSlotScale, h = 144 * kSlotScale;
+    float w = 72 * g_slotScale, h = 144 * g_slotScale;
     bool hov = false;
     char bid[32]; snprintf(bid, sizeof bid, "##slot%d_%d", card, slot);
     bool lclick = HitButton(bid, x, y, w, h, &hov);
@@ -275,7 +293,7 @@ void DrawSlot(int card, int slot, float x, float y) {
         DL->AddLine(ImVec2(c.x - a, c.y), ImVec2(c.x + a, c.y), col, t);
         DL->AddLine(ImVec2(c.x, c.y - a), ImVec2(c.x, c.y + a), col, t);
     }
-    float ox = x - 23 * kSlotScale, oy = y - 21 * kSlotScale, ow = 118 * kSlotScale, oh = 187 * kSlotScale;
+    float ox = x - 23 * g_slotScale, oy = y - 21 * g_slotScale, ow = 118 * g_slotScale, oh = 187 * g_slotScale;
     if (conflict)                         // 직업이 맞지 않는 칸: 게임의 빨간 X
         Image(kUnavail, ox, oy, ow, oh, dropHere ? IM_COL32_WHITE : IM_COL32(255, 255, 255, 200));
     else if (dragging)                    // 넣을 수 있는 칸 표시
@@ -286,7 +304,10 @@ void DrawSlot(int card, int slot, float x, float y) {
     if (dropHere && conflictKind == 2) {
         Tooltip(Txt::T("dup_title"), Txt::T("dup_body"), kColWarn);
     } else if (dropHere && conflict) {
-        const Game::TrinketInfo& o = Game::TrinketById(d.trinket[1 - slot]);
+        int os = -1;
+        for (int s = 0; s < g_slots && os < 0; ++s)
+            if (s != slot && d.trinket[s][0] && !Game::ClassesCompatible(Game::Trinket(drag.hash), Game::TrinketById(d.trinket[s]))) os = s;
+        const Game::TrinketInfo& o = Game::TrinketById(os >= 0 ? d.trinket[os] : "");
         std::string body = Txt::F("class_body", { o.classLabel });
         Tooltip(Txt::T("class_title"), body.c_str(), kColWarn);
     }
@@ -305,9 +326,9 @@ void DrawSlot(int card, int slot, float x, float y) {
 
 void DrawCard(int i, float x, float y) {
     Presets::Preset& d = g_draft[i];
-    bool hov = Hover(x, y, kCardW, kCardH);
-    DL->AddRectFilled(P(x, y), P(x + kCardW, y + kCardH), IM_COL32(0, 0, 0, 120));
-    DL->AddRect(P(x, y), P(x + kCardW, y + kCardH),
+    bool hov = Hover(x, y, g_cardW, kCardH);
+    DL->AddRectFilled(P(x, y), P(x + g_cardW, y + kCardH), IM_COL32(0, 0, 0, 120));
+    DL->AddRect(P(x, y), P(x + g_cardW, y + kCardH),
                 g_dirty[i] ? IM_COL32(200, 130, 60, 220) : hov ? IM_COL32(150, 125, 75, 220) : IM_COL32(80, 66, 44, 180), 0, 0, 1.0f * S());
 
     char num[8]; snprintf(num, sizeof num, "%d", i + 1);
@@ -315,7 +336,7 @@ void DrawCard(int i, float x, float y) {
     float nx = x + 34;
     if (g_editing == i) {
         ImGui::SetCursorScreenPos(P(nx - 2, y + 4));
-        ImGui::SetNextItemWidth((kCardW - 44) * S());
+        ImGui::SetNextItemWidth((g_cardW - 44) * S());
         ImGui::PushStyleColor(ImGuiCol_FrameBg, IM_COL32(20, 16, 12, 255));
         ImGui::PushStyleColor(ImGuiCol_Text, kColTitle);
         if (g_editFocus) { ImGui::SetKeyboardFocusHere(); g_editFocus = false; }
@@ -332,21 +353,21 @@ void DrawCard(int i, float x, float y) {
     } else {
         bool nameHov = false;
         char nid[16]; snprintf(nid, sizeof nid, "##name%d", i);
-        if (HitButton(nid, nx - 2, y + 4, kCardW - 44, 26, &nameHov)) {
+        if (HitButton(nid, nx - 2, y + 4, g_cardW - 44, 26, &nameHov)) {
             g_editing = i; g_editFocus = true; g_editStart = ImGui::GetFrameCount();
             snprintf(g_editBuf, sizeof g_editBuf, "%s", d.name);
             Snd(kSndClick);
         }
         Text(FontId::Body, nx, y + 7, d.name[0] ? (nameHov ? IM_COL32(240, 220, 150, 255) : kColTitle) : kColDim,
-             d.name[0] ? d.name : Txt::T("empty_set"), true, (x + kCardW - 10 - (g_dirty[i] ? TextWFit(FontId::Body, Txt::T("unsaved"), 90) + 8 : 0)) - nx);
-        if (g_dirty[i]) { const char* t = Txt::T("unsaved"); Text(FontId::Body, x + kCardW - 10 - TextWFit(FontId::Body, t, 90), y + 7, kColWarn, t, true, 90); }
+             d.name[0] ? d.name : Txt::T("empty_set"), true, (x + g_cardW - 10 - (g_dirty[i] ? TextWFit(FontId::Body, Txt::T("unsaved"), 90) + 8 : 0)) - nx);
+        if (g_dirty[i]) { const char* t = Txt::T("unsaved"); Text(FontId::Body, x + g_cardW - 10 - TextWFit(FontId::Body, t, 90), y + 7, kColWarn, t, true, 90); }
         if (nameHov && !Game::Drag().active) Tooltip(Txt::T("rename"), Txt::T("rename_set_body"));
     }
 
-    DrawSlot(i, 0, x + 12, y + 40);
-    DrawSlot(i, 1, x + 12 + 72 * kSlotScale + 8, y + 40);
+    for (int s = 0; s < g_slots; ++s)
+        DrawSlot(i, s, x + 12 + s * (72 * g_slotScale + 8), y + 40 + (144 * (kSlotScale - g_slotScale)) * 0.5f);
 
-    float bx = x + 150, bw = 110, bh = 34;
+    float bx = x + g_cardW - 122, bw = 110, bh = 34;
     char bid[32];
     snprintf(bid, sizeof bid, "##save%d", i);
     if (TextButton(bid, Txt::T("save"), bx, y + 52, bw, bh, g_dirty[i], g_dirty[i])) {
@@ -357,7 +378,7 @@ void DrawCard(int i, float x, float y) {
         Toast(Txt::F("set_saved", { Txt::Num(i + 1) }).c_str());
     }
     snprintf(bid, sizeof bid, "##clear%d", i);
-    bool empty = !d.name[0] && !d.trinket[0][0] && !d.trinket[1][0];
+    bool empty = !d.name[0] && !d.Any();
     if (TextButton(bid, Txt::T("clear"), bx, y + 98, bw, bh, !empty)) {
         d = Presets::Preset{};
         Presets::Get(i) = d;
@@ -406,7 +427,7 @@ void DrawBagPanel(const Game::BagState& bag) {
     Image(kClose, kCloseX, kCloseY, -1, -1, hov ? IM_COL32(255, 255, 255, 255) : IM_COL32(225, 225, 225, 255));
     if (hov) Tooltip(Txt::T("close"), Txt::T("close_body"));
 
-    int totalRows = (Presets::kCount + kCols - 1) / kCols;
+    int totalRows = (Presets::kCount + g_cols - 1) / g_cols;
     int maxRow = std::max(0, totalRows - kVisibleRows);
     if (Hover(0, kBgY, kPanelW, kPanelH) && ImGui::GetIO().MouseWheel != 0 && g_editing < 0)
     {
@@ -427,9 +448,9 @@ void DrawBagPanel(const Game::BagState& bag) {
 
     g_dropCard = g_dropSlot = -1;
     for (int r = 0; r < kVisibleRows; ++r)
-        for (int c = 0; c < kCols; ++c) {
-            int i = (g_scrollRow + r) * kCols + c;
-            if (i < Presets::kCount) DrawCard(i, kGridX + c * (kCardW + kCardGapX), kGridY + r * (kCardH + kCardGapY));
+        for (int c = 0; c < g_cols; ++c) {
+            int i = (g_scrollRow + r) * g_cols + c;
+            if (i < Presets::kCount) DrawCard(i, kGridX + c * (g_cardW + kCardGapX), kGridY + r * (kCardH + kCardGapY));
         }
 
     if (g_toastTime > 0) {
@@ -529,6 +550,10 @@ void DrawHeroPicker(const Game::HeroPanelState& hp) {
     if (!g_pickOpen) return;
     if (g_pickHero != hp.hero) { g_pickOpen = false; return; }   // 다른 영웅으로 바뀌면 닫음
 
+    // 장신구 미니 그림 크기와 창 너비 (칸이 많으면 그림을 줄이고 창을 넓힘)
+    const float kIconW = g_slots <= 4 ? 24.0f : 18.0f, kIconH = kIconW * 2;
+    const float kIconsW = g_slots * (kIconW + 4) + 6;
+    const float kPickW = std::max(UiPreset::kPickW, 252 + kIconsW);
     // 작은 창: 버튼 오른쪽, 아래쪽을 버튼에 맞춤
     float h = kPickHeadH + Presets::kCount * kPickRowH + kPickPad * 2 + 28;
     float wx = bx + kBtn + 8, wy = by + kBtn - h;
@@ -556,13 +581,13 @@ void DrawHeroPicker(const Game::HeroPanelState& hp) {
     float y = wy + kPickHeadH;
     for (int i = 0; i < Presets::kCount; ++i, y += kPickRowH) {
         const Presets::Preset& p = Presets::Get(i);
-        bool has = p.trinket[0][0] || p.trinket[1][0];
+        bool has = p.Any();
         float rx = wx + kPickPad, rw = kPickW - kPickPad * 2;
         char rid[16]; snprintf(rid, sizeof rid, "##pick%d", i);
         bool rh = false;
         bool click = HitButton(rid, rx, y, rw, kPickRowH - 4, &rh);
         bool classOk = true;
-        for (int s = 0; s < 2; ++s)
+        for (int s = 0; s < Presets::kMaxSlots; ++s)
             if (p.trinket[s][0] && !Game::CanUse(Game::TrinketById(p.trinket[s]), heroClass)) classOk = false;
         bool enabled = has && town && classOk;
         DL->AddRectFilled(P(rx, y), P(rx + rw, y + kPickRowH - 4),
@@ -572,26 +597,31 @@ void DrawHeroPicker(const Game::HeroPanelState& hp) {
         char num[8]; snprintf(num, sizeof num, "%d", i + 1);
         Text(FontId::Body, rx + 8, y + 14, kColDim, num, false);
         const char* nm = p.name[0] ? p.name : (has ? Txt::T("no_name") : Txt::T("empty_set"));
-        Text(FontId::Body, rx + 42, y + 14, has ? (rh && enabled ? IM_COL32(255, 235, 170, 255) : kColTitle) : kColDim, nm, false, rw - 42 - 68);
-        // 장신구 미니 그림 2개
-        float iw = 24, ih = 48, ix = rx + rw - (iw * 2 + 10);
-        for (int s = 0; s < 2; ++s)
-            DrawTrinket(p.trinket[s], ix + s * (iw + 4), y + 2, iw, ih, !has || !classOk);
+        Text(FontId::Body, rx + 42, y + 14, has ? (rh && enabled ? IM_COL32(255, 235, 170, 255) : kColTitle) : kColDim, nm, false, rw - 42 - kIconsW - 4);
+        // 장신구 미니 그림 (칸 수만큼)
+        float iw = kIconW, ih = kIconH, ix = rx + rw - (g_slots * (iw + 4) + 6);
+        float iy = y + (kPickRowH - 4 - ih) * 0.5f;
+        for (int s = 0; s < g_slots; ++s)
+            DrawTrinket(p.trinket[s], ix + s * (iw + 4), iy, iw, ih, !has || !classOk);
         if (has && !classOk) {      // 다른 직업 전용: 비활성화 + 빨간 X
             DL->AddRectFilled(P(rx, y), P(rx + rw, y + kPickRowH - 4), IM_COL32(0, 0, 0, 120));
-            Image(kUnavail, ix - 6, y - 4, iw * 2 + 16, ih + 8, IM_COL32(255, 255, 255, 200));
+            Image(kUnavail, ix - 6, y - 4, g_slots * (iw + 4) + 8, kPickRowH, IM_COL32(255, 255, 255, 200));
         }
         if (rh && has) {
-            std::string a = p.trinket[0][0] ? TrinketLabel(p.trinket[0]) : std::string(Txt::T("none"));
-            std::string b = p.trinket[1][0] ? TrinketLabel(p.trinket[1]) : std::string(Txt::T("none"));
-            std::string body = a + " / " + b;
+            std::string body;
+            for (int s = 0; s < g_slots; ++s) {
+                if (s) body += " / ";
+                body += p.trinket[s][0] ? TrinketLabel(p.trinket[s]) : std::string(Txt::T("none"));
+            }
             if (!classOk) Tooltip(Txt::T("class_locked"), body.c_str(), kColWarn);
             else if (!town) Tooltip(Txt::T("town_only_load"), body.c_str(), kColWarn);
             else       Tooltip(Txt::T("click_equip"), body.c_str());
         }
         if (click && has && !enabled) Snd(kSndInvalid);
         if (click && enabled) {
-            Game::EquipResult r = Game::EquipPreset(hp.hero, p.trinket[0], p.trinket[1]);
+            const char* ids[Presets::kMaxSlots];
+            for (int s = 0; s < Presets::kMaxSlots; ++s) ids[s] = p.trinket[s];
+            Game::EquipResult r = Game::EquipPreset(hp.hero, ids, g_slots);
             Snd(r.error.empty() && r.missing.empty() ? kSndEquip : kSndInvalid);
             if (!r.error.empty()) { snprintf(g_pickMsg, sizeof g_pickMsg, "%s", r.error.c_str()); g_pickMsgWarn = true; }
             else if (!r.missing.empty()) {
@@ -619,6 +649,7 @@ bool IsOpen() { return g_open || g_pickOpen; }
 
 void Draw() {
     g_hoverPrev = g_hoverNow; g_hoverNow = 0;
+    UpdateLayout();
     // 다른 영지를 불러오면 그 영지의 프리셋으로 바꿈
     int prof = Game::CurrentProfile();
     if (prof != Presets::Profile()) {

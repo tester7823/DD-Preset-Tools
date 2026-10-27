@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <cstring>
 #include <string>
+#include <algorithm>
 #include "presets.h"
 #include "log.h"
 
@@ -32,19 +33,20 @@ namespace {
         char line[512]; int idx = 0;
         while (idx < kCount && fgets(line, sizeof line, f)) {
             size_t n = strcspn(line, "\r\n"); line[n] = 0;
-            const char* fields[3] = { line, "", "" };
-            size_t lens[3] = { 0, 0, 0 };
+            // 이름 \t 장신구1 \t 장신구2 ... (예전 2칸 파일도 그대로 읽힘)
+            const int kF = 1 + kMaxSlots;
+            const char* fields[kF]; size_t lens[kF];
+            for (int k = 0; k < kF; ++k) { fields[k] = ""; lens[k] = 0; }
             int fi = 0; const char* start = line;
             for (char* p = line;; ++p) {
                 if (*p == '\t' || *p == 0) {
-                    if (fi < 3) { fields[fi] = start; lens[fi] = (size_t)(p - start); }
+                    if (fi < kF) { fields[fi] = start; lens[fi] = (size_t)(p - start); }
                     ++fi; if (*p == 0) break; start = p + 1;
                 }
             }
             Preset& pr = g_presets[idx++];
             CopyField(pr.name, sizeof pr.name, fields[0], lens[0]);
-            CopyField(pr.trinket[0], sizeof pr.trinket[0], fields[1], lens[1]);
-            CopyField(pr.trinket[1], sizeof pr.trinket[1], fields[2], lens[2]);
+            for (int k = 0; k < kMaxSlots; ++k) CopyField(pr.trinket[k], sizeof pr.trinket[k], fields[1 + k], lens[1 + k]);
         }
         fclose(f);
         return idx;
@@ -55,7 +57,13 @@ namespace {
         std::wstring tmp = FilePath() + L".tmp";
         FILE* f = _wfopen(tmp.c_str(), L"wb");
         if (!f) { Log("프리셋 저장 실패"); g_dirty = false; return; }
-        for (auto& p : g_presets) fprintf(f, "%s\t%s\t%s\n", p.name, p.trinket[0], p.trinket[1]);
+        for (auto& p : g_presets) {
+            int last = 1;                                   // 최소 2칸(예전 형식)은 항상 씀
+            for (int k = 0; k < kMaxSlots; ++k) if (p.trinket[k][0]) last = std::max(last, k);
+            fprintf(f, "%s", p.name);
+            for (int k = 0; k <= last; ++k) fprintf(f, "\t%s", p.trinket[k]);
+            fprintf(f, "\n");
+        }
         fclose(f);
         MoveFileExW(tmp.c_str(), FilePath().c_str(), MOVEFILE_REPLACE_EXISTING);
         g_dirty = false;

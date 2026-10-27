@@ -1316,7 +1316,21 @@ std::unordered_map<uint32_t, int> OwnedCounts(bool* ok) {
     return m;
 }
 
-EquipResult EquipPreset(void* hero, const char* id0, const char* id1) {
+int TrinketSlots() {
+    static int cached = 2; static DWORD at = 0;
+    DWORD now = GetTickCount();
+    if (at && now - at < 1000) return cached;
+    at = now;
+    if (!g_ok || !Campaign()) return cached;
+    size_t mx = 0;
+    ForEachRosterInv([&](BYTE* inv) { mx = std::max(mx, InvSize(inv)); });
+    int n = mx ? (int)std::min<size_t>(mx, 8) : cached;
+    if (n != cached) Log("영웅 장신구 칸 수: %d", n);
+    cached = std::max(1, n);
+    return cached;
+}
+
+EquipResult EquipPreset(void* hero, const char* const* ids, int n) {
     EquipResult r;
     if (!g_ok || !hero) { r.error = Txt::T("err_off"); return r; }
     if (!InTown())      { r.error = Txt::T("town_only_load"); return r; }
@@ -1325,15 +1339,18 @@ EquipResult EquipPreset(void* hero, const char* id0, const char* id1) {
     BYTE* hinv = HeroInv(hero);
     size_t nh = InvSize(hinv), ne = est ? InvSize(est) : 0;
     if (!est || nh == 0 || nh > 8 || ne == 0) { r.error = Txt::T("err_data"); return r; }
+    if (n > (int)nh) n = (int)nh;           // 영웅 칸보다 많은 것은 무시
+    if (n > 8) n = 8;
 
-    const char* want[2] = { id0, id1 };
+    const char* want[8] = {};
+    for (int j = 0; j < n; ++j) want[j] = ids[j];
     uint32_t hc = HeroClassHash(hero);
-    for (int j = 0; j < 2; ++j)
+    for (int j = 0; j < n; ++j)
         if (want[j] && want[j][0] && !CanUse(TrinketById(want[j]), hc)) { r.error = Txt::T("err_class"); return r; }
     bool used[8] = {};
-    bool done[2] = {};
+    bool done[8] = {};
     // 1) 이미 끼고 있는 것은 그대로
-    for (int j = 0; j < 2; ++j) {
+    for (int j = 0; j < n; ++j) {
         if (!want[j] || !want[j][0]) { done[j] = true; continue; }
         uint32_t h = Hash(want[j]);
         for (size_t s = 0; s < nh; ++s) {
@@ -1342,7 +1359,7 @@ EquipResult EquipPreset(void* hero, const char* id0, const char* id1) {
         }
     }
     // 2) 나머지는 가방에서 꺼내 끼움
-    for (int j = 0; j < 2; ++j) {
+    for (int j = 0; j < n; ++j) {
         if (done[j]) continue;
         size_t slot = (size_t)j < nh && !used[j] ? (size_t)j : nh;
         if (slot == nh) for (size_t s = 0; s < nh; ++s) if (!used[s]) { slot = s; break; }

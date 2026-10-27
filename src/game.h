@@ -132,6 +132,7 @@ PartyResult LoadParty(const int guids[4]);
 
 // 프리셋 적용: 가방에서 꺼내 영웅에게 장착 (빈 문자열 = 그 칸은 건드리지 않음)
 struct EquipResult { int equipped = 0, already = 0; std::vector<std::string> missing; std::string error; };
-EquipResult EquipPreset(void* hero, const char* id0, const char* id1);
+EquipResult EquipPreset(void* hero, const char* const* ids, int n);   // ids[0..n) 를 칸 순서대로
+int  TrinketSlots();   // 영웅 장신구 칸 수 (기본 2, 칸 확장 모드면 4 등. 최대 8)
 
 } // namespace Game
