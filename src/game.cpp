@@ -131,6 +131,8 @@ volatile float g_subAlpha = 0; unsigned g_subSeen = 0, g_subLast = 0;
 bool g_logHDrag = false;
 bool g_logBag = false, g_logHero = false, g_logDrag = false;
 
+float g_mapK = 1.0f, g_mapX = 0.0f, g_mapY = 0.0f; int g_mapVW = 0, g_mapVH = 0;
+
 Xform CurrentXform(float raw[16] = nullptr) {
     const float* mat = At<const float*>(RVA_MatrixCurrent);
     if (raw) memcpy(raw, mat, 16 * sizeof(float));
@@ -140,6 +142,9 @@ Xform CurrentXform(float raw[16] = nullptr) {
     } else {
         x.m[0] = mat[0]; x.m[1] = mat[4]; x.m[2] = mat[1]; x.m[3] = mat[5]; x.m[4] = mat[3]; x.m[5] = mat[7];
     }
+    for (int i = 0; i < 4; ++i) x.m[i] *= g_mapK;
+    x.m[4] = x.m[4] * g_mapK + g_mapX;
+    x.m[5] = x.m[5] * g_mapK + g_mapY;
     return x;
 }
 
@@ -295,7 +300,9 @@ struct SubDiag { int nonSub[16] = {}, sub[16] = {}; int earlySeq = -1, earlyLaye
 DWORD g_diagLast = 0;
 constexpr int kTextLayer = 7;   // 게임의 글자 그리기(0x276AF0)가 쌓는 층
 void (*g_lateCb)() = nullptr;
+void (*g_frameCb)() = nullptr; bool g_frameCbDone = false;
 void __fastcall Hook_DrawElem(void* elem) {
+    if (!g_frameCbDone && g_frameCb) { g_frameCbDone = true; g_frameCb(); }   // 이 프레임 첫 요소: 게임 화면 크기 확인
     int layer = elem ? *(int*)elem : 0;
     g_layerMask |= 1ull << (layer < 0 ? 0 : layer > 63 ? 63 : layer);
 
@@ -753,6 +760,22 @@ int PopDeletedSlot() {
 }
 
 void UpdateProvisionBaseline();
+void SetScreenMap(float k, float ox, float oy, int vw, int vh) {
+    static int logs = 0;
+    if ((k != g_mapK || ox != g_mapX || oy != g_mapY || vw != g_mapVW || vh != g_mapVH) && logs < 30 && ++logs)
+        Log("화면 맞춤: 게임 화면 %dx%d → 배율 %.3f, 여백 (%.1f, %.1f)", vw, vh, k, ox, oy);
+    g_mapK = k; g_mapX = ox; g_mapY = oy; g_mapVW = vw; g_mapVH = vh;
+}
+
+void FullScreenXform1080(float& k, float& ox, float& oy) {
+    ImVec2 ds = ImGui::GetIO().DisplaySize;
+    if (g_mapVW <= 0 || g_mapVH <= 0) { k = ds.y / 1080.0f; ox = ds.x * 0.5f - 960 * k; oy = 0; return; }
+    float s = g_mapVH / 1080.0f;                       // 게임 화면 안에서 1080 기준 배율
+    k  = g_mapK * s;
+    ox = g_mapX + (g_mapVW * 0.5f - 960 * s) * g_mapK; // 게임 화면 가운데 맞춤
+    oy = g_mapY;
+}
+
 void BeginFrame() {
     if (g_bagSeen != g_bagLast)   { g_bag = g_bagPending; g_bagLast = g_bagSeen; }    else g_bag.visible = false;
     if (g_heroSeen != g_heroLast) { g_hero = g_heroPending; g_heroLast = g_heroSeen; } else g_hero.visible = false;
@@ -1100,8 +1123,9 @@ bool ShowHeroInfo(int guid) {
 float ModalAmount() { return g_modal; }
 void SetModalRenderCallback(void (*cb)()) { g_modalCb = cb; }
 void SetLateRenderCallback(void (*cb)()) { g_lateCb = cb; }
+void SetFrameStartCallback(void (*cb)()) { g_frameCb = cb; }
 void NewGameFrame() {
-    g_layerDrawn = false;
+    g_layerDrawn = false; g_frameCbDone = false;
     if (g_subAlpha > 0 && GetTickCount() - g_diagLast > 1000) {
         g_diagLast = GetTickCount();
         char b[400]; int n = snprintf(b, sizeof b, "[자막 진단] 시작번호 %d, 층별 일반/자막:", g_subStart);

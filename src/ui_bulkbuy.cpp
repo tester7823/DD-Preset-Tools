@@ -112,9 +112,10 @@ void DrawDialog() {
     ImGuiIO& io = ImGui::GetIO();
     g_dialogT = std::min(1.0f, g_dialogT + io.DeltaTime / 0.15f);
     ImVec2 ds = io.DisplaySize;
-    float s = ds.y / 1080.0f;
+    float s, ox, oy;
+    Game::FullScreenXform1080(s, ox, oy);
     XF = Game::Xform{};
-    XF.m[0] = XF.m[3] = s; XF.m[4] = ds.x * 0.5f - 960 * s; XF.m[5] = 0;
+    XF.m[0] = XF.m[3] = s; XF.m[4] = ox; XF.m[5] = oy;
 
     ImGui::SetNextWindowPos(ImVec2(0, 0));
     ImGui::SetNextWindowSize(ds);

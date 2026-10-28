@@ -68,6 +68,11 @@ struct HeroInfo {
 };
 
 void BeginFrame();
+// 게임 화면(내부 해상도) → 실제 창 좌표 변환. 게임이 내부 해상도로 그린 뒤 창 비율에 맞춰 가운데 맞춤으로 늘릴 때 사용
+void SetFrameStartCallback(void (*cb)());   // 게임이 화면을 그리기 시작할 때 (매 프레임)
+void SetScreenMap(float k, float ox, float oy, int vw, int vh);
+// 게임 내부 화면(1920x1080 기준 좌표)을 창 좌표로: 배율 k, 왼쪽 위 여백 (ox, oy)
+void FullScreenXform1080(float& k, float& ox, float& oy);
 const BagState&       Bag();
 const HeroPanelState& HeroPanel();
 const DragState&      Drag();

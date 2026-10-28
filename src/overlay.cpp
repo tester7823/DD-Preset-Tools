@@ -188,6 +188,23 @@ void ScaleAlpha(ImDrawData* dd, float a) {
         }
 }
 
+// 게임이 그리는 내부 화면 크기(vw x vh)를 창에 가운데 맞춤으로 늘린다고 보고 좌표 변환값을 정함
+int g_virtW = 0, g_virtH = 0;
+void UpdateScreenMap(int vw, int vh) {
+    if (vw < 320 || vh < 180) return;                 // 이상한 값(작은 보조 화면 등)은 무시
+    static int candW = 0, candH = 0;
+    if (vw != g_virtW || vh != g_virtH) {             // 크기가 바뀌면 다음 프레임에도 같을 때만 반영
+        if (vw != candW || vh != candH) { candW = vw; candH = vh; return; }
+    }
+    g_virtW = vw; g_virtH = vh;
+    int ww = 0, wh = 0;
+    SDL_GetWindowSize(g_window, &ww, &wh);
+    if (ww <= 0 || wh <= 0) return;
+    if (ww == vw && wh == vh) { Game::SetScreenMap(1.0f, 0.0f, 0.0f, vw, vh); return; }
+    float k = std::min((float)ww / vw, (float)wh / vh);
+    Game::SetScreenMap(k, (ww - vw * k) * 0.5f, (wh - vh * k) * 0.5f, vw, vh);
+}
+
 ImDrawData g_lateData;
 ImVector<ImDrawList*> g_lateLists;
 bool g_latePending = false;
@@ -206,6 +223,25 @@ void RenderUI(bool atSwap) {
     if (g_backend == Backend::GL3) ImGui_ImplOpenGL3_NewFrame(); else ImGui_ImplOpenGL2_NewFrame();
     ImGui_ImplSDL2_NewFrame();
     ImGui::NewFrame();
+    {   // 화면 크기 진단 (바뀔 때만 기록)
+        static int lw = -1, lh = -1, ldw = -1, ldh = -1; static bool lbag = false;
+        int ww = 0, wh = 0, dw = 0, dh = 0;
+        SDL_GetWindowSize(g_window, &ww, &wh); SDL_GL_GetDrawableSize(g_window, &dw, &dh);
+        GLint vp[4] = {}; glGetIntegerv(GL_VIEWPORT, vp);
+        if (ww != lw || wh != lh || dw != ldw || dh != ldh) {
+            lw = ww; lh = wh; ldw = dw; ldh = dh; lbag = false;
+            ImGuiIO& io = ImGui::GetIO();
+            Log("[화면] 창 %dx%d / 그리기 %dx%d / ImGui %.0fx%.0f / viewport %d,%d %dx%d (%s)", ww, wh, dw, dh,
+                io.DisplaySize.x, io.DisplaySize.y, vp[0], vp[1], vp[2], vp[3], atSwap ? "프레임 끝" : "게임 화면 안");
+        }
+        const Game::BagState& b = Game::Bag();
+        if (b.visible && !lbag) {
+            lbag = true; ImVec2 o = b.ToScreen(ImVec2(0, 0));
+            Log("[화면] 장신구 가방 위치 (%.1f, %.1f) 배율 %.3f / M %.3f %.3f %.3f %.3f | %.3f %.3f %.3f %.3f | %.3f %.3f %.3f %.3f | %.3f %.3f %.3f %.3f",
+                o.x, o.y, b.Scale(), b.raw[0], b.raw[1], b.raw[2], b.raw[3], b.raw[4], b.raw[5], b.raw[6], b.raw[7],
+                b.raw[8], b.raw[9], b.raw[10], b.raw[11], b.raw[12], b.raw[13], b.raw[14], b.raw[15]);
+        }
+    }
 
     static bool modOn = false;
     modOn = Game::ModEnabled();
@@ -266,13 +302,22 @@ void RenderLate(bool atSwap) {
 }
 void RenderLateCb() { RenderLate(false); }
 
+// 게임이 이번 프레임을 그리기 시작할 때: 게임 내부 화면 크기를 읽어 창 좌표 변환값 갱신
+void OnGameFrameStart() {
+    if (!g_ready) return;
+    GLint vp[4] = {};
+    glGetIntegerv(GL_VIEWPORT, vp);
+    UpdateScreenMap(vp[2], vp[3]);
+}
+
 // 게임이 확인 창을 그리기 직전 (게임 화면 위, 확인 창 아래)
 void RenderBeforeModal() {
-    if (!g_ready || g_earlyDone || g_earlyBroken) return;
+    if (!g_ready) return;
     GLint vp[4] = {};
     glGetIntegerv(GL_VIEWPORT, vp);
     int w = 0, h = 0;
     SDL_GL_GetDrawableSize(g_window, &w, &h);
+    if (g_earlyDone || g_earlyBroken) return;
     if (vp[0] != 0 || vp[1] != 0 || vp[2] != w || vp[3] != h) {
         g_earlyBroken = true;
         Log("확인 창 직전 그리기 불가 (viewport %d,%d %dx%d / 창 %dx%d) → 확인 창이 뜨면 숨김", vp[0], vp[1], vp[2], vp[3], w, h);
@@ -299,7 +344,7 @@ void OnFrame(SDL_Window* window) {
         }
     }
     ++g_frames;
-    if (g_frames == 1) { Game::Install(); Game::SetModalRenderCallback(&RenderBeforeModal); Game::SetLateRenderCallback(&RenderLateCb); }
+    if (g_frames == 1) { Game::Install(); Game::SetModalRenderCallback(&RenderBeforeModal); Game::SetLateRenderCallback(&RenderLateCb); Game::SetFrameStartCallback(&OnGameFrameStart); }
     if (g_earlyDone) g_earlyDone = false;     // 이미 게임 화면 안(확인 창 아래)에 그렸음
     else RenderUI(true);
     RenderLate(true);                          // 자막 글자 직전에 못 그렸으면 여기서
