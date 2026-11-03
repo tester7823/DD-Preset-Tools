@@ -10,6 +10,9 @@
 #include <vector>
 #include <unordered_map>
 #include <memory>
+#ifdef __APPLE__
+#include <unistd.h>
+#endif
 
 #define STB_IMAGE_IMPLEMENTATION
 #define STBI_ONLY_PNG
@@ -194,6 +197,15 @@ const std::wstring& GameRoot() {
         wchar_t p[MAX_PATH]; GetModuleFileNameW(nullptr, p, MAX_PATH);
         root = p;
         for (int i = 0; i < 3; ++i) root = root.substr(0, root.find_last_of(L"\\/"));   // exe → win64 → _windows → root
+#ifdef __APPLE__
+        // 맥: Darkest → MacOS → Contents → Darkest.app → _osx → 게임 폴더 (위에서 3번 올라왔으니 2번 더)
+        for (int i = 0; i < 2; ++i) root = root.substr(0, root.find_last_of(L"\\/"));
+        if (GetFileAttributesW((root + L"\\heroes").c_str()) == INVALID_FILE_ATTRIBUTES) {   // 다른 구조면 게임이 정한 작업 폴더
+            char cwd[2048];
+            if (getcwd(cwd, sizeof cwd)) { wchar_t w[2048]; MultiByteToWideChar(CP_UTF8, 0, cwd, -1, w, 2048); root = w; }
+        }
+        {   char u[2048]; WideCharToMultiByte(CP_UTF8, 0, root.c_str(), -1, u, sizeof u, nullptr, nullptr); Log("게임 폴더: %s", u); }
+#endif
     }
     return root;
 }

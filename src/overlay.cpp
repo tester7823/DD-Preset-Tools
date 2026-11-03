@@ -58,8 +58,14 @@ std::string WToUtf8(const std::wstring& w) {
 void LoadFonts() {
     ImGuiIO& io = ImGui::GetIO();
     const char* candidates[] = {
+#ifdef __APPLE__
+        "/System/Library/Fonts/AppleSDGothicNeo.ttc",
+        "/System/Library/Fonts/Supplemental/AppleGothic.ttf",
+        "/Library/Fonts/AppleGothic.ttf",
+#else
         "C:\\Windows\\Fonts\\malgun.ttf",
         "C:\\Windows\\Fonts\\gulim.ttc",
+#endif
     };
     for (const char* f : candidates) {
         if (GetFileAttributesA(f) != INVALID_FILE_ATTRIBUTES) {
@@ -176,7 +182,11 @@ void DrawDebugWindow() {
 }
 
 bool g_earlyDone = false;     // 이번 프레임은 확인 창 직전에 이미 그렸음
+#ifdef __APPLE__
+bool g_earlyBroken = true;    // 맥판: 프레임 끝에서만 그림 → 확인 창이 뜨면 숨김
+#else
 bool g_earlyBroken = false;   // 확인 창 직전 그리기가 맞지 않는 환경 → 확인 창이 뜨면 숨김으로 대체
+#endif
 
 // 화면 전환/확인 창에 맞춰 오버레이 전체 투명도 조절
 void ScaleAlpha(ImDrawData* dd, float a) {
