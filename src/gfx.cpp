@@ -284,12 +284,28 @@ const std::vector<std::wstring>& ModRoots() {
 }
 #endif
 
+std::vector<std::wstring> g_preferred; bool g_preferredChanged = false;
+void SetPreferredRoots(const std::vector<std::wstring>& roots) {
+    if (roots == g_preferred) return;
+    g_preferred = roots; g_preferredChanged = true;
+}
+
 const Texture& ModTex(const char* rel) {
+    if (g_preferredChanged) {                     // 적용 모드가 바뀌면 모드 그림을 다시 찾음 (GL 컨텍스트 안에서)
+        g_preferredChanged = false;
+        for (auto it = g_tex.begin(); it != g_tex.end();) {
+            if (it->first.compare(0, 4, "mod:") == 0) { if (it->second.id) { GLuint id = it->second.id; glDeleteTextures(1, &id); } it = g_tex.erase(it); }
+            else ++it;
+        }
+    }
     std::string key = std::string("mod:") + rel;
     auto it = g_tex.find(key);
     if (it != g_tex.end()) return it->second;
     std::wstring wrel = Utf8ToW(rel);
-    std::string bytes = ReadFile(GameRoot() + L"\\" + wrel);
+    std::string bytes;
+    // 적용된 모드 (목록 뒤쪽이 덮어쓴다고 보고 뒤에서부터) → 게임 폴더 → 나머지 폴더
+    for (auto r = g_preferred.rbegin(); r != g_preferred.rend() && bytes.empty(); ++r) bytes = ReadFile(*r + L"\\" + wrel);
+    if (bytes.empty()) bytes = ReadFile(GameRoot() + L"\\" + wrel);
 #ifndef GFX_HARNESS
     if (bytes.empty()) for (auto& r : ModRoots()) { bytes = ReadFile(r + L"\\" + wrel); if (!bytes.empty()) break; }
 #endif

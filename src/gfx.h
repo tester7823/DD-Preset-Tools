@@ -24,6 +24,8 @@ const Texture& GameTex(const char* relPath);
 const Texture& ModTex(const char* relPath);
 // 게임 데이터가 있는 모든 폴더 (DLC, DLC features, 로컬 mods, 창작마당) — 게임 루트 제외
 const std::vector<std::wstring>& ModRoots();
+// 지금 세이브에 적용된 모드 폴더 (게임 모드 목록 순서). ModTex 가 이 폴더들을 먼저 찾음
+void SetPreferredRoots(const std::vector<std::wstring>& roots);
 // 이 모드의 데이터 폴더 (...\dd_preset_tools). 없으면 빈 문자열
 const std::wstring& ToolRoot();
 // 특정 폴더 기준 그림 (장신구가 정의된 모드 폴더에서 아이콘을 먼저 찾을 때)

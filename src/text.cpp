@@ -126,9 +126,10 @@ std::string F(const char* key, std::initializer_list<std::string> args) {
 std::string Num(long long v) { return std::to_string(v); }
 
 // 게임이 보여주는 성전사 이름의 글자 종류로 언어 추정
+static void NoteLang(const std::string& l) { static std::string last; if (l != last) { last = l; ReportSet("lang", "%s", l.c_str()); } }
 std::string Language() {
     std::string gl = GameLanguage();
-    if (!gl.empty()) return g_lang = gl;
+    if (!gl.empty()) { NoteLang(gl); return g_lang = gl; }
     std::string sl = Game::SteamLanguage();
     if (!sl.empty()) {
         LoadXml();

@@ -14,6 +14,8 @@
 
 namespace Game {
 namespace {
+bool Readable(const void* p, size_t n);
+void ResetReadCache();
 
 // ---- 주소(RVA) --------------------------------------------------------------
 constexpr DWORD kExpectedStamp = 0x6AB13309;
@@ -465,11 +467,14 @@ BOOL WINAPI Hook_DeleteFileW(LPCWSTR name) {
     return r;
 }
 
+int g_hookOk = 0, g_hookAll = 0;
 bool HookOne(DWORD rva, const unsigned char* sig, size_t n, void* detour, void** orig, const char* name) {
     BYTE* t = g_base + rva;
+    ++g_hookAll;
     if (memcmp(t, sig, n) != 0) { Log("  %s: 함수 모양이 다름 - 건너뜀", name); return false; }
     if (MH_CreateHook(t, detour, orig) != MH_OK || MH_EnableHook(t) != MH_OK) { Log("  %s: 후킹 실패", name); return false; }
     Log("  %s: OK", name);
+    ++g_hookOk;
     return true;
 }
 
@@ -505,10 +510,10 @@ template <class F> void ForEachRosterInv(F f) {
     BYTE* c = Campaign(); if (!c) return;
     BYTE* r = c + (AltMode() ? 0x728 : 0);
     BYTE** b = *(BYTE***)(r + 0x20); BYTE** e = *(BYTE***)(r + 0x28);
-    if (!b || e < b || e - b > 2000) return;
+    if (!b || e < b || e - b > 2000 || (e > b && !Readable(b, (size_t)(e - b) * sizeof(BYTE*)))) return;
     for (BYTE** p = b; p != e; ++p) {
         BYTE* entry = *p;
-        if (!entry) continue;
+        if (!entry || !Readable(entry + 0x1210, 0x20)) continue;   // 불러오는 도중 등 아직 준비 안 된 영웅은 건너뜀
         if (LooksLikeHeroInv(entry + 0x1218)) f(entry + 0x1218);
         else if (LooksLikeHeroInv(entry + 0x1210)) f(entry + 0x1210);
     }
@@ -545,11 +550,20 @@ void CalibrateRarity() {
 
 // 직업 제한(vector<uint32_t>) 위치를 라이브러리에서 찾아냄
 int g_classOffset = -2;
+// 읽어도 되는 메모리인지 (VirtualQuery). 같은 프레임 안에서는 확인한 영역을 기억해 빠르게
+struct ReadRegion { const BYTE* b = nullptr; const BYTE* e = nullptr; };
+ReadRegion g_readCache[16]; int g_readNext = 0;
+void ResetReadCache() { for (auto& r : g_readCache) r = ReadRegion{}; }
 bool Readable(const void* p, size_t n) {
+    const BYTE* a = (const BYTE*)p;
+    if (!a || a + n < a) return false;
+    for (auto& r : g_readCache) if (r.b && a >= r.b && a + n <= r.e) return true;
     MEMORY_BASIC_INFORMATION mbi;
     if (!VirtualQuery(p, &mbi, sizeof mbi) || mbi.State != MEM_COMMIT) return false;
     if (mbi.Protect & (PAGE_NOACCESS | PAGE_GUARD)) return false;
-    return (const BYTE*)p + n <= (const BYTE*)mbi.BaseAddress + mbi.RegionSize;
+    const BYTE* end = (const BYTE*)mbi.BaseAddress + mbi.RegionSize;
+    g_readCache[g_readNext] = { (const BYTE*)mbi.BaseAddress, end }; g_readNext = (g_readNext + 1) % 16;
+    return a + n <= end;
 }
 std::unordered_map<uint32_t, int> ClassSet() {
     std::unordered_map<uint32_t, int> set;
@@ -587,6 +601,68 @@ void CalibrateClasses() {
 struct TrinketDef { std::vector<std::string> classes; std::wstring root; };
 std::unordered_map<uint32_t, TrinketDef> g_defs;
 bool g_defsLoaded = false;
+std::string g_defsKey;                    // 정의를 읽을 때의 적용 모드 목록
+
+// 모드 폴더의 project.xml <Title>
+std::string ReadModTitle(const std::wstring& dir) {
+    std::string title;
+    FILE* f = _wfopen((dir + L"\\project.xml").c_str(), L"rb");
+    if (!f) return title;
+    std::string xml; char buf[4096]; size_t n;
+    while ((n = fread(buf, 1, sizeof buf, f)) > 0 && xml.size() < 65536) xml.append(buf, n);
+    fclose(f);
+    size_t s = xml.find("<Title>"), t = xml.find("</Title>");
+    if (s == std::string::npos || t == std::string::npos || t <= s + 7) return title;
+    title = xml.substr(s + 7, t - s - 7);
+    while (!title.empty() && isspace((unsigned char)title.back())) title.pop_back();
+    while (!title.empty() && isspace((unsigned char)title.front())) title.erase(0, 1);
+    static const char* ents[][2] = { {"&amp;","&"}, {"&lt;","<"}, {"&gt;",">"}, {"&quot;","\""}, {"&apos;","'"} };
+    std::string out;
+    for (size_t i = 0; i < title.size();) {
+        bool hit = false;
+        for (auto& en : ents) {
+            size_t L = strlen(en[0]);
+            if (title.compare(i, L, en[0]) == 0) { out += en[1]; i += L; hit = true; break; }
+        }
+        if (!hit) out += title[i++];
+    }
+    return out;
+}
+
+// DLC 폴더 (항상 적용)
+bool IsDlcRoot(const std::wstring& r) {
+    std::wstring d = Gfx::GameRoot() + L"\\dlc";
+    return r.size() > d.size() && _wcsnicmp(r.c_str(), d.c_str(), d.size()) == 0;
+}
+// 지금 세이브에 적용된 모드 폴더 (게임 모드 목록 순서). 구독만 하고 꺼 둔 모드는 제외
+std::vector<std::wstring> g_activeRoots;
+std::string g_activeKey;
+void UpdateActiveRoots(const std::vector<std::string>& names, const std::string& key) {
+    if (key == g_activeKey) return;
+    struct R { std::wstring root; std::string folder, title; };
+    static std::vector<R> idx; static bool built = false;
+    if (!built) {
+        built = true;
+        for (auto& r : Gfx::ModRoots()) {
+            if (IsDlcRoot(r)) continue;
+            std::wstring w = r.substr(r.find_last_of(L"\\/") + 1);
+            char u[520] = {}; WideCharToMultiByte(CP_UTF8, 0, w.c_str(), -1, u, sizeof u, nullptr, nullptr);
+            idx.push_back({ r, u, ReadModTitle(r) });
+        }
+    }
+    g_activeKey = key;
+    g_activeRoots.clear();
+    int miss = 0;
+    for (auto& n : names) {
+        const R* hit = nullptr;
+        for (auto& r : idx) if (_stricmp(r.folder.c_str(), n.c_str()) == 0) { hit = &r; break; }
+        if (!hit) for (auto& r : idx) if (!r.title.empty() && strncmp(r.title.c_str(), n.c_str(), 0x7F) == 0) { hit = &r; break; }
+        if (hit) g_activeRoots.push_back(hit->root); else ++miss;
+    }
+    Gfx::SetPreferredRoots(g_activeRoots);
+    Log("적용된 모드 폴더 %zu개 (찾지 못함 %d개)", g_activeRoots.size(), miss);
+    ReportSet("mods", "%zu(miss%d)", names.size(), miss);
+}
 
 void ParseTrinketJson(const std::string& t, const std::wstring& root, int& count) {
     auto readStr = [&](size_t& i) -> std::string {          // i 는 따옴표 위치
@@ -617,9 +693,11 @@ void ParseTrinketJson(const std::string& t, const std::wstring& root, int& count
 
 void LoadTrinketDefs() {
     g_defsLoaded = true;
+    g_defsKey = g_activeKey;
     std::vector<std::wstring> roots;
     roots.push_back(Gfx::GameRoot());
-    for (auto& r : Gfx::ModRoots()) roots.push_back(r);
+    for (auto& r : Gfx::ModRoots()) if (IsDlcRoot(r)) roots.push_back(r);
+    for (auto& r : g_activeRoots) roots.push_back(r);          // 적용된 모드만, 게임 목록 순서 (뒤가 덮어씀)
     int files = 0, count = 0;
     for (auto& root : roots) {
         WIN32_FIND_DATAW fd;
@@ -688,6 +766,7 @@ bool HashVerified() {
     }
     g_hashOk = (checked > 0 && good == checked) ? 1 : 0;
     Log("해시 확인: %zu/%zu 일치 → %s", good, checked, g_hashOk ? "OK" : u8"불일치 - 자동 정리/불러오기 끔");
+    ReportSet("hash", "%zu/%zu", good, checked);
     return g_hashOk == 1;
 }
 
@@ -706,6 +785,7 @@ bool Install() {
     auto nt = (IMAGE_NT_HEADERS*)(g_base + ((IMAGE_DOS_HEADER*)g_base)->e_lfanew);
     if (nt->FileHeader.TimeDateStamp != kExpectedStamp) {
         Log("게임 버전이 다릅니다 (stamp 0x%08lX). 게임 연동 기능을 끕니다.", nt->FileHeader.TimeDateStamp);
+        ReportSet("game", "WRONG-VERSION-%08lX", nt->FileHeader.TimeDateStamp);
         return false;
     }
     g_trinketType = Hash("trinket");
@@ -747,6 +827,8 @@ bool Install() {
     bool okS = HookSteamStorage();
     Log("  세이브 슬롯 감지: CreateFileW %s, CreateFile2 %s, Steam 클라우드 %s", okW ? "OK" : u8"실패", ok2 ? "OK" : u8"실패", okS ? "OK" : u8"실패");
     g_ok = a;
+    ReportSet("game", g_ok ? "OK" : "BAG-HOOK-FAIL");
+    ReportSet("hooks", "%d/%d", g_hookOk, g_hookAll);
     return g_ok;
 #endif
 }
@@ -764,6 +846,10 @@ void SetScreenMap(float k, float ox, float oy, int vw, int vh) {
     static int logs = 0;
     if ((k != g_mapK || ox != g_mapX || oy != g_mapY || vw != g_mapVW || vh != g_mapVH) && logs < 30 && ++logs)
         Log("화면 맞춤: 게임 화면 %dx%d → 배율 %.3f, 여백 (%.1f, %.1f)", vw, vh, k, ox, oy);
+    if (k != g_mapK || ox != g_mapX || oy != g_mapY || vw != g_mapVW || vh != g_mapVH) {
+        ImVec2 ds = ImGui::GetIO().DisplaySize;
+        ReportSet("screen", "%.0fx%.0f/game%dx%d", ds.x, ds.y, vw, vh);
+    }
     g_mapK = k; g_mapX = ox; g_mapY = oy; g_mapVW = vw; g_mapVH = vh;
 }
 
@@ -777,6 +863,11 @@ void FullScreenXform1080(float& k, float& ox, float& oy) {
 }
 
 void BeginFrame() {
+    ResetReadCache();
+    if (g_defsLoaded && g_defsKey != g_activeKey) {        // 다른 모드 구성의 세이브를 불러옴 → 장신구 정보 다시 읽기
+        g_defs.clear(); g_info.clear(); g_defsLoaded = false;
+        Log("모드 구성이 바뀜 → 장신구 정보 다시 읽음");
+    }
     if (g_bagSeen != g_bagLast)   { g_bag = g_bagPending; g_bagLast = g_bagSeen; }    else g_bag.visible = false;
     if (g_heroSeen != g_heroLast) { g_hero = g_heroPending; g_heroLast = g_heroSeen; } else g_hero.visible = false;
     if (g_dragSeen != g_dragLast) { g_drag = g_dragPending; g_dragLast = g_dragSeen; } else g_drag.active = false;
@@ -868,49 +959,27 @@ bool ModEnabled() {
     WideCharToMultiByte(CP_UTF8, 0, wname.c_str(), -1, name, sizeof name, nullptr, nullptr);
     // 게임은 적용된 모드를 project.xml 의 <Title> 로 저장함 → 제목도 비교
     static std::wstring titleFor; static std::string title;
-    if (titleFor != parent) {
-        titleFor = parent; title.clear();
-        FILE* f = _wfopen((parent + L"\\project.xml").c_str(), L"rb");
-        if (f) {
-            std::string xml; char buf[4096]; size_t n;
-            while ((n = fread(buf, 1, sizeof buf, f)) > 0 && xml.size() < 65536) xml.append(buf, n);
-            fclose(f);
-            size_t s = xml.find("<Title>"), t = xml.find("</Title>");
-            if (s != std::string::npos && t != std::string::npos && t > s + 7) {
-                title = xml.substr(s + 7, t - s - 7);
-                while (!title.empty() && isspace((unsigned char)title.back())) title.pop_back();
-                while (!title.empty() && isspace((unsigned char)title.front())) title.erase(0, 1);
-                // XML 엔티티 풀기 (&amp; → & 등)
-                static const char* ents[][2] = { {"&amp;","&"}, {"&lt;","<"}, {"&gt;",">"}, {"&quot;","\""}, {"&apos;","'"} };
-                std::string out;
-                for (size_t i = 0; i < title.size();) {
-                    bool hit = false;
-                    for (auto& en : ents) {
-                        size_t L = strlen(en[0]);
-                        if (title.compare(i, L, en[0]) == 0) { out += en[1]; i += L; hit = true; break; }
-                    }
-                    if (!hit) out += title[i++];
-                }
-                title = out;
-            }
-        }
-        Log("모드 제목: '%s'", title.c_str());
-    }
+    if (titleFor != parent) { titleFor = parent; title = ReadModTitle(parent); Log("모드 제목: '%s'", title.c_str()); }
     BYTE* gp = g_base + RVA_GamePersist;
     BYTE* b = *(BYTE**)(gp + 0x208); BYTE* e = *(BYTE**)(gp + 0x210);
     bool on = false;
-    std::string list;
-    if (b && e >= b && (e - b) / 0xC0 <= 1000) {
+    std::string list, key;
+    std::vector<std::string> names;
+    if (b && e >= b && (e - b) / 0xC0 <= 1000 && (e == b || Readable(b, (size_t)(e - b)))) {
         for (BYTE* p = b; p < e; p += 0xC0) {
             const char* n = (const char*)p;
+            names.emplace_back(n, strnlen(n, 0x80));
+            key += names.back(); key += '|';
             if (_stricmp(n, name) == 0 || (!title.empty() && strncmp(n, title.c_str(), 0x7F) == 0)) on = true;
-            if (list.size() < 600) { list += n; list += "("; list += (const char*)(p + 0x80); list += ") "; }
+            if (list.size() < 600) { list += names.back(); list += "("; list.append((const char*)(p + 0x80), strnlen((const char*)(p + 0x80), 0x40)); list += ") "; }
         }
     }
+    UpdateActiveRoots(names, key);
     static std::string lastList = "?"; static bool lastOn = false;
     if (list != lastList || on != lastOn) {
         lastList = list; lastOn = on;
         Log("모드 '%s' %s / 적용된 모드: %s", name, on ? u8"켜짐" : u8"꺼짐", list.empty() ? u8"(없음)" : list.c_str());
+        ReportSet("mod", on ? "ON" : "OFF");
     }
     return on;
 }
@@ -919,7 +988,7 @@ bool ProvisionVisible() { return g_provVisible; }
 // ---- 원정 준비: 골드 아이템 일괄 구매 ----
 int* WalletAmount(BYTE* c, int hash) {
     BYTE* b = *(BYTE**)(c + 0xE70); BYTE* e = *(BYTE**)(c + 0xE78);
-    if (!b || e <= b || (e - b) / 0x48 > 64) return nullptr;
+    if (!b || e <= b || (e - b) / 0x48 > 512) return nullptr;     // 화폐를 추가하는 모드 대비
     for (BYTE* p = b; p < e; p += 0x48) if (*(int*)(p + 0x44) == hash) return (int*)p;
     return nullptr;
 }
@@ -1156,8 +1225,8 @@ BYTE* RosterSys() { BYTE* c = Campaign(); return c ? c + (AltMode() ? 0x728 : 0)
 BYTE* FindEntry(int guid) {
     BYTE* r = RosterSys(); if (!r) return nullptr;
     BYTE** b = *(BYTE***)(r + 0x20); BYTE** e = *(BYTE***)(r + 0x28);
-    if (!b || e < b || e - b > 2000) return nullptr;
-    for (BYTE** p = b; p != e; ++p) if (*p && *(int*)*p == guid) return *p;
+    if (!b || e < b || e - b > 2000 || (e > b && !Readable(b, (size_t)(e - b) * sizeof(BYTE*)))) return nullptr;
+    for (BYTE** p = b; p != e; ++p) if (*p && Readable(*p, 0x1548) && *(int*)*p == guid) return *p;
     return nullptr;
 }
 
@@ -1259,9 +1328,11 @@ const TrinketInfo& Trinket(uint32_t hash) {
     auto it = g_info.find(hash);
     if (it != g_info.end()) return it->second;
     TrinketInfo info;
+    static const TrinketInfo kNone;
     if (g_ok) {
-        if (g_rarityOffset == -2) CalibrateRarity();
         BYTE* lb = *At<BYTE**>(RVA_TrinketLibBegin); BYTE* le = *At<BYTE**>(RVA_TrinketLibBegin + 8);
+        if (!lb || le <= lb) return kNone;                 // 아직 라이브러리 로드 전 → 기억하지 않음 (나중에 다시)
+        if (g_rarityOffset == -2) CalibrateRarity();
         if (lb && le > lb) {
             for (BYTE* e = lb; e + kLibEntrySize <= le; e += kLibEntrySize) {
                 if (*(uint32_t*)(e + 0x40) != hash) continue;
@@ -1349,7 +1420,7 @@ int TrinketSlots() {
     size_t mx = 0;
     ForEachRosterInv([&](BYTE* inv) { mx = std::max(mx, InvSize(inv)); });
     int n = mx ? (int)std::min<size_t>(mx, 8) : cached;
-    if (n != cached) Log("영웅 장신구 칸 수: %d", n);
+    if (n != cached) { Log("영웅 장신구 칸 수: %d", n); ReportSet("slots", "%d", n); }
     cached = std::max(1, n);
     return cached;
 }
@@ -1403,6 +1474,13 @@ EquipResult EquipPreset(void* hero, const char* const* ids, int n) {
             // 여러 개 겹친 경우: 하나만 꺼내고 영웅의 원래 장신구는 가방 빈 칸으로
             size_t empty = ne;
             for (size_t i = 0; i < ne; ++i) if (ItemQty(InvItem(est, i)) <= 0) { empty = i; break; }
+            bool heroHas = ItemQty(InvItem(hinv, slot)) > 0;
+            if (empty == ne && heroHas) {                  // 가방이 가득: 원래 장신구를 둘 곳이 없으면 바꾸지 않음
+                DestroyItem(tmp);
+                Log("가방에 빈 칸이 없어 겹친 장신구를 꺼내지 않음");
+                r.missing.push_back(ti.name.empty() ? want[j] : ti.name);
+                continue;
+            }
             *(int*)tmp = 1;
             At<FnSetItem>(RVA_InvSetItem)(hinv, (unsigned)slot, tmp);     // tmp ← 영웅의 원래 장신구
             *(int*)src -= 1;
