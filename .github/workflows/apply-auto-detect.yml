@@ -2,7 +2,7 @@ name: apply-auto-detect
 # one-time: apply auto-detect-patches.tar.xz (git format-patch) to this branch, remove these files, then build
 on:
   push:
-    branches: [ auto-detect ]
+    branches: [ auto-detect, tester7823-patch-1 ]
   workflow_dispatch:
 permissions:
   contents: write
