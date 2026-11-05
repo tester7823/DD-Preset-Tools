@@ -1,5 +1,5 @@
 // 게임 함수 후킹 + 게임 데이터 읽기/쓰기 — macOS 판 (베타)
-// 대상: Darkest (macOS x86_64), LC_UUID 52A44181-0EB1-3886-9204-53CF2FB87CD1
+// 대상: Darkest (macOS x86_64). 주소는 실행 시 게임의 심볼 테이블에서 이름으로 찾음 → 게임 업데이트에 자동 대응
 // 주소는 nm 주소(0x100000000 기준). 실행 시 이미지 슬라이드를 더해서 사용
 // 윈도우판(game.cpp)과 같은 기능. 자막/화면 전환/층 정보는 맥판에서 아직 쓰지 않음 (항상 보임 처리)
 #include "windows.h"
@@ -13,6 +13,10 @@
 #include <mach/mach_vm.h>
 #include <mach-o/dyld.h>
 #include <mach-o/loader.h>
+#include <mach-o/nlist.h>
+#include <cxxabi.h>
+#include <vector>
+#include <string>
 #include "hook.h"
 #include "../gfx.h"
 #include "../game.h"
@@ -24,60 +28,62 @@ namespace {
 bool Readable(const void* p, size_t n);
 void ResetReadCache();
 
-// ---- 주소 (nm) ----------------------------------------------------------------
-const uint8_t kUUID[16] = { 0x52,0xA4,0x41,0x81,0x0E,0xB1,0x38,0x86,0x92,0x04,0x53,0xCF,0x2F,0xB8,0x7C,0xD1 };
+// ---- 주소 (nm) — 값은 ResolveSymbols() 가 심볼 이름으로 채움. 주석의 숫자는 2026-09 빌드 기준 참고값 ----
 // 후킹
-constexpr uint64_t A_DrawUnequip   = 0x100b2ac70;  // TownUI::Panel::RealmInventory::DrawUnequipButton(vec2)
-constexpr uint64_t A_RIDragRender  = 0x100e2cd20;  // RealmInventoryItemDragObject::Render() const
-constexpr uint64_t A_Palette       = 0x100eb0650;  // UI::Panel::CharacterDisplay::ShowCharacterPaletteButton(vec2, Hero*)
-constexpr uint64_t A_RosterPre     = 0x100b4a600;  // TownUI::Panel::RosterList::PreChildrenShowInternal
-constexpr uint64_t A_HeroSlotPre   = 0x100a951d0;  // TownUI::Panel::HeroSlot::PreChildrenShowInternal
-constexpr uint64_t A_QuestSelPre   = 0x100af6870;  // TownUI::Panel::QuestSelect::PreChildrenShowInternal
-constexpr uint64_t A_ProvPre       = 0x100aeba60;  // TownUI::Panel::ProvisionSelect::PreChildrenShowInternal
-constexpr uint64_t A_ModalRender   = 0x100d92270;  // ModalDialog::Render
-constexpr uint64_t A_HeroDrag      = 0x100e1e5a0;  // HeroDragObject::Render
-constexpr uint64_t A_OpenSave      = 0x100097b70;  // open_SaveData(StorageMount, c_string, unsigned, bool, bool, unsigned)
-constexpr uint64_t A_RemoveSave    = 0x100096fe0;  // RemoveSaveFile(StorageMount, c_string)
+uint64_t A_DrawUnequip   = 0;  /* 0x100b2ac70 */  // TownUI::Panel::RealmInventory::DrawUnequipButton(vec2)
+uint64_t A_RIDragRender  = 0;  /* 0x100e2cd20 */  // RealmInventoryItemDragObject::Render() const
+uint64_t A_Palette       = 0;  /* 0x100eb0650 */  // UI::Panel::CharacterDisplay::ShowCharacterPaletteButton(vec2, Hero*)
+uint64_t A_RosterPre     = 0;  /* 0x100b4a600 */  // TownUI::Panel::RosterList::PreChildrenShowInternal
+uint64_t A_HeroSlotPre   = 0;  /* 0x100a951d0 */  // TownUI::Panel::HeroSlot::PreChildrenShowInternal
+uint64_t A_QuestSelPre   = 0;  /* 0x100af6870 */  // TownUI::Panel::QuestSelect::PreChildrenShowInternal
+uint64_t A_ProvPre       = 0;  /* 0x100aeba60 */  // TownUI::Panel::ProvisionSelect::PreChildrenShowInternal
+uint64_t A_ModalRender   = 0;  /* 0x100d92270 */  // ModalDialog::Render
+uint64_t A_HeroDrag      = 0;  /* 0x100e1e5a0 */  // HeroDragObject::Render
+uint64_t A_OpenSave      = 0;  /* 0x100097b70 */  // open_SaveData(StorageMount, c_string, unsigned, bool, bool, unsigned)
+uint64_t A_RemoveSave    = 0;  /* 0x100096fe0 */  // RemoveSaveFile(StorageMount, c_string)
 // 호출
-constexpr uint64_t A_TransformTop  = 0x1000598f0;  // Transform_Top() → mat4*
-constexpr uint64_t A_GetSlotIface  = 0x100a98800;  // HeroSlot::GetHeroSlotInterface()
-constexpr uint64_t A_ModalVisible  = 0x100d92250;  // ModalDialog::IsVisible() const
-constexpr uint64_t A_ConfirmInst   = 0x100df25f0;  // ConfirmDialog::System::Instance()
-constexpr uint64_t A_ConfirmQueue  = 0x100df6610;  // ConfirmDialog::System::GetIsEntriesInQueue()
-constexpr uint64_t A_SetStatus     = 0x100809070;  // Roster::System::SetStatus(guid, type)
-constexpr uint64_t A_RefreshParty  = 0x100af5010;  // QuestSelect::RefreshParty
-constexpr uint64_t A_ItemCopy      = 0x1002a8dd0;  // Inventory::Item::Item(Item const&)
-constexpr uint64_t A_ItemDtor      = 0x10029c9b0;  // Inventory::Item::~Item()
-constexpr uint64_t A_SwitchItems   = 0x1008c8e00;  // Inventory::System::SwitchItems(unsigned, Item*) — 칸과 item 을 맞바꿈
-constexpr uint64_t A_TrinketBuffs  = 0x10046fbf0;  // Actor::UpdateTrinketBuffs()
-constexpr uint64_t A_Localize      = 0x1003cc360;  // Localization::LocalizeStringFromId(char const*)
-constexpr uint64_t A_AudioEvent    = 0x100005510;  // Audio_Event(char const*, bool, std::function<void(char const*)>)
-constexpr uint64_t A_UsingPad      = 0x10007cdf0;  // Input_IsUsingController()
-constexpr uint64_t A_StoreInv      = 0x1007c78d0;  // Provision::System::GetStoreInventorySystem()
-constexpr uint64_t A_RaidInv       = 0x1007c78b0;  // Provision::System::GetNextRaidInventorySystem()
-constexpr uint64_t A_GoldValue     = 0x1007c85d0;  // Provision::System::GetPurchaseGoldValueOfItem(Item const&)
-constexpr uint64_t A_ShardValue    = 0x1007c8740;  // Provision::System::GetPurchaseShardValueOfItem(Item const&)
-constexpr uint64_t A_BuyLambda     = 0x100aee3e0;  // ProvisionSelect 상점 클릭 $_1 __func::operator()(unsigned&&) (+0x10 화면, +0x18 상점, +0x20 가방)
-constexpr uint64_t A_EstateAmount  = 0x1007a19c0;  // Estate::System::GetAmount(unsigned) const
-constexpr uint64_t A_CurrencyHash  = 0x10041eb20;  // Estate::CurrencyType::operator unsigned() const
+uint64_t A_TransformTop  = 0;  /* 0x1000598f0 */  // Transform_Top() → mat4*
+uint64_t A_GetSlotIface  = 0;  /* 0x100a98800 */  // HeroSlot::GetHeroSlotInterface()
+uint64_t A_ModalVisible  = 0;  /* 0x100d92250 */  // ModalDialog::IsVisible() const
+uint64_t A_ConfirmInst   = 0;  /* 0x100df25f0 */  // ConfirmDialog::System::Instance()
+uint64_t A_ConfirmQueue  = 0;  /* 0x100df6610 */  // ConfirmDialog::System::GetIsEntriesInQueue()
+uint64_t A_SetStatus     = 0;  /* 0x100809070 */  // Roster::System::SetStatus(guid, type)
+uint64_t A_RefreshParty  = 0;  /* 0x100af5010 */  // QuestSelect::RefreshParty
+uint64_t A_ItemCopy      = 0;  /* 0x1002a8dd0 */  // Inventory::Item::Item(Item const&)
+uint64_t A_ItemDtor      = 0;  /* 0x10029c9b0 */  // Inventory::Item::~Item()
+uint64_t A_SwitchItems   = 0;  /* 0x1008c8e00 */  // Inventory::System::SwitchItems(unsigned, Item*) — 칸과 item 을 맞바꿈
+uint64_t A_TrinketBuffs  = 0;  /* 0x10046fbf0 */  // Actor::UpdateTrinketBuffs()
+uint64_t A_Localize      = 0;  /* 0x1003cc360 */  // Localization::LocalizeStringFromId(char const*)
+uint64_t A_AudioEvent    = 0;  /* 0x100005510 */  // Audio_Event(char const*, bool, std::function<void(char const*)>)
+uint64_t A_UsingPad      = 0;  /* 0x10007cdf0 */  // Input_IsUsingController()
+uint64_t A_StoreInv      = 0;  /* 0x1007c78d0 */  // Provision::System::GetStoreInventorySystem()
+uint64_t A_RaidInv       = 0;  /* 0x1007c78b0 */  // Provision::System::GetNextRaidInventorySystem()
+uint64_t A_GoldValue     = 0;  /* 0x1007c85d0 */  // Provision::System::GetPurchaseGoldValueOfItem(Item const&)
+uint64_t A_ShardValue    = 0;  /* 0x1007c8740 */  // Provision::System::GetPurchaseShardValueOfItem(Item const&)
+uint64_t A_BuyLambda     = 0;  /* 0x100aee3e0 */  // ProvisionSelect 상점 클릭 $_1 __func::operator()(unsigned&&) (+0x10 화면, +0x18 상점, +0x20 가방)
+uint64_t A_EstateAmount  = 0;  /* 0x1007a19c0 */  // Estate::System::GetAmount(unsigned) const
+uint64_t A_CurrencyHash  = 0;  /* 0x10041eb20 */  // Estate::CurrencyType::operator unsigned() const
 // 데이터
-constexpr uint64_t D_KGold         = 0x102f17928;  // Estate::CurrencyTypes::k_gold (상점 람다가 쓰는 것)
-constexpr uint64_t D_Campaign      = 0x103016e70;  // Campaign::g_pCurrent
-constexpr uint64_t D_App           = 0x102ffff20;  // _App (+0x54b 다른 저장 방식, +0x748+0x208 적용된 모드 목록)
-constexpr uint64_t D_TrinketLib    = 0x102defbc8;  // Trinket::g_TrinketClasses vector (0x428)
-constexpr uint64_t D_Rarities      = 0x102defc20;  // Trinket::g_Rarities vector (0x4C)
-constexpr uint64_t D_HeroClasses   = 0x102dd08b8;  // g_hero_classes vector<HeroClass*>
-constexpr uint64_t D_NetHeroClasses= 0x102dd08d0;  // g_networked_hero_classes (다른 저장 방식)
-constexpr uint64_t VT_RIDragData   = 0x101343c70;  // RealmInventoryItemDragData vtable(+0x10)
-constexpr uint64_t VT_HeroDragData = 0x101343b98;  // HeroDragData
-constexpr uint64_t VT_QSlotIface   = 0x101345348;  // QuestSelectHeroSlotInterface
+uint64_t D_KGold         = 0;  /* 0x102f17928 */  // Estate::CurrencyTypes::k_gold (상점 람다가 쓰는 것)
+uint64_t D_Campaign      = 0;  /* 0x103016e70 */  // Campaign::g_pCurrent
+uint64_t D_App           = 0;  /* 0x102ffff20 */  // _App (+0x54b 다른 저장 방식, +0x748+0x208 적용된 모드 목록)
+uint64_t D_TrinketLib    = 0;  /* 0x102defbc8 */  // Trinket::g_TrinketClasses vector (0x428)
+uint64_t D_Rarities      = 0;  /* 0x102defc20 */  // Trinket::g_Rarities vector (0x4C)
+uint64_t D_HeroClasses   = 0;  /* 0x102dd08b8 */  // g_hero_classes vector<HeroClass*>
+uint64_t D_NetHeroClasses = 0;  /* 0x102dd08d0 */  // g_networked_hero_classes (다른 저장 방식)
+uint64_t VT_RIDragData   = 0;  /* 0x101343c70 */  // RealmInventoryItemDragData vtable(+0x10)
+uint64_t VT_HeroDragData = 0;  /* 0x101343b98 */  // HeroDragData
+uint64_t VT_QSlotIface   = 0;  /* 0x101345348 */  // QuestSelectHeroSlotInterface
 
 constexpr size_t kItemSize = 0x5B0;
-constexpr size_t kLibEntrySize = 0x428;
+size_t kLibEntrySize = 0x428;           // 실행 시 라이브러리 데이터로 다시 맞춤 (CalibrateLibStride)
 constexpr size_t kRaritySize = 0x4C;
 // 오프셋
-constexpr size_t kHeroInv = 0x1200, kHeroClass = 0x1298, kHeroGuid = 0x12F4;
-constexpr size_t kEntryHero = 0x10, kEntryStatus = 0x1520;
+// 영웅 구조체 오프셋: 실행 시 첫 영웅의 인벤토리 위치를 찾아 함께 옮김 (CalibrateHero). 윈도우판은 2026-10 패치에서 +0x70
+size_t kHeroInv = 0x1200, kHeroClass = 0x1298, kHeroGuid = 0x12F4;
+constexpr size_t kEntryHero = 0x10;
+size_t kEntryStatus = 0x1520;
+int g_heroCal = 0;   // 0 미확인, 1 확인, -1 실패
 constexpr size_t kAltRoster = 0x710;
 constexpr size_t kEstate = 0xE20, kEstateInv = 0x40, kEstateInvAlt = 0xA0, kProvision = 0x1550;
 
@@ -205,7 +211,7 @@ void Hook_RosterPre(void* self) { FrameStart(); ++g_townSeen; o_RosterPre(self);
 
 void Hook_HeroSlotPre(void* self) {
     FrameStart();
-    uint8_t* iface = self ? (uint8_t*)At<FnPtrRet>(A_GetSlotIface)(self) : nullptr;
+    uint8_t* iface = (self && A_GetSlotIface && VT_QSlotIface) ? (uint8_t*)At<FnPtrRet>(A_GetSlotIface)(self) : nullptr;
     if (iface && Readable(iface, 0x240) && *(void**)iface == At<void*>(VT_QSlotIface)) {
         unsigned idx = *(unsigned*)(iface + 0x230);
         if (idx < 4) {
@@ -225,7 +231,7 @@ void Hook_HeroSlotPre(void* self) {
 
 float g_modalPending = 0, g_modal = 0; unsigned g_modalSeen = 0, g_modalLast = 0;
 void Hook_Modal(void* self) {
-    if (self && At<FnBool>(A_ModalVisible)(self)) {
+    if (self && A_ModalVisible && At<FnBool>(A_ModalVisible)(self)) {
         g_modalPending = 1.0f; ++g_modalSeen;
         static bool logged = false;
         if (!logged) { logged = true; Log("확인 창 감지"); }
@@ -279,6 +285,7 @@ uint64_t Hook_RemoveSave(int mount, const char* path) {
 int g_hookOk = 0, g_hookAll = 0;
 bool HookOne(uint64_t nm, void* detour, void** orig, const char* name) {
     ++g_hookAll;
+    if (!nm) { Log("  %s: 주소를 찾지 못함 - 건너뜀", name); return false; }
     if (!Hook::Install(At<void*>(nm), detour, orig)) { Log("  %s: 후킹 실패 (함수 모양이 다르거나 메모리 보호)", name); return false; }
     Log("  %s: OK", name);
     ++g_hookOk;
@@ -306,7 +313,8 @@ uint8_t* Campaign() { return *At<uint8_t**>(D_Campaign); }
 bool AltMode() { return *(At<uint8_t*>(D_App) + 0x54B) != 0; }
 uint8_t* EstateSys() { uint8_t* c = Campaign(); return c ? c + kEstate : nullptr; }
 uint8_t* EstateInv() { uint8_t* e = EstateSys(); return e ? e + (AltMode() ? kEstateInvAlt : kEstateInv) : nullptr; }
-uint8_t* HeroInv(void* hero) { return (uint8_t*)hero + kHeroInv; }
+void CalibrateHero(uint8_t* entry);
+uint8_t* HeroInv(void* hero) { if (g_heroCal == 0 && hero) CalibrateHero((uint8_t*)hero - kEntryHero); return (uint8_t*)hero + kHeroInv; }
 uint8_t* RosterSys() { uint8_t* c = Campaign(); return c ? c + (AltMode() ? kAltRoster : 0) : nullptr; }
 
 bool LooksLikeHeroInv(uint8_t* inv) {
@@ -316,10 +324,35 @@ bool LooksLikeHeroInv(uint8_t* inv) {
     size_t n = (size_t)(e - b) / kItemSize;
     return n >= 1 && n <= 8;
 }
+bool IsHeroClassPtr(uint8_t* cls);
+// 첫 영웅에서 인벤토리(vector<Item>) 위치를 찾아 영웅 오프셋을 함께 옮기고, 직업 포인터로 확인
+void CalibrateHero(uint8_t* entry) {
+    if (g_heroCal != 0 || !entry) return;
+    uint8_t* hero = entry + kEntryHero;
+    const size_t base = 0x1200;
+    for (size_t d = 0; d <= 0x400; d += 8) {
+        for (int sg = 0; sg < 2; ++sg) {
+            if (d == 0 && sg) continue;
+            size_t off = sg ? base - d : base + d;
+            if (!LooksLikeHeroInv(hero + off)) continue;
+            size_t shift = off - base;
+            uint8_t* cls = Readable(hero + 0x1298 + shift, 8) ? *(uint8_t**)(hero + 0x1298 + shift) : nullptr;
+            if (!IsHeroClassPtr(cls)) continue;
+            kHeroInv = 0x1200 + shift; kHeroClass = 0x1298 + shift; kHeroGuid = 0x12F4 + shift; kEntryStatus = 0x1520 + shift;
+            g_heroCal = 1;
+            Log("영웅 오프셋 확인: 인벤 0x%zX 직업 0x%zX guid 0x%zX 상태 0x%zX (이동 %+ld)", kHeroInv, kHeroClass, kHeroGuid, kEntryStatus, (long)shift);
+            return;
+        }
+    }
+    g_heroCal = -1;
+    Log("영웅 오프셋을 확인하지 못함 - 영웅 관련 기능 끔");
+}
 template <class F> void ForEachRosterEntry(F f) {
     uint8_t* r = RosterSys(); if (!r || !Readable(r + 0x20, 0x10)) return;
     uint8_t** b = *(uint8_t***)(r + 0x20); uint8_t** e = *(uint8_t***)(r + 0x28);
     if (!b || e < b || e - b > 2000 || (e > b && !Readable(b, (size_t)(e - b) * sizeof(uint8_t*)))) return;
+    if (g_heroCal == 0) for (uint8_t** p = b; p != e && g_heroCal == 0; ++p) if (*p && Readable(*p, 0x1800)) CalibrateHero(*p);
+    if (g_heroCal < 0) return;
     for (uint8_t** p = b; p != e; ++p) if (*p && Readable(*p, kEntryStatus + 4)) f(*p);
 }
 template <class F> void ForEachRosterInv(F f) {
@@ -333,7 +366,34 @@ void DestroyItem(uint8_t* it) { At<FnVoid>(A_ItemDtor)(it); }
 
 std::unordered_map<uint32_t, TrinketInfo> g_info;
 int g_rarityOffset = -2;
-uint8_t** LibVec() { return At<uint8_t**>(D_TrinketLib); }
+uint32_t HashImpl(const char* s);
+// 라이브러리 원소 크기: 각 원소 = id 문자열[0x40] + 해시(+0x40). 해시가 연속으로 맞는 간격을 찾음
+void CalibrateLibStride(uint8_t* lb, uint8_t* le) {
+    static bool done = false;
+    if (done || !lb || le <= lb) return;
+    size_t bytes = (size_t)(le - lb);
+    for (size_t st = 0x300; st <= 0x1000; st += 8) {
+        if (bytes % st) continue;
+        size_t n = bytes / st, good = 0, chk = std::min<size_t>(n, 20);
+        for (size_t i = 0; i < chk; ++i) {
+            uint8_t* e = lb + i * st;
+            if (!Readable(e, 0x44)) break;
+            char id[65] = {}; memcpy(id, e, 64);
+            if (id[0] && HashImpl(id) == *(uint32_t*)(e + 0x40)) ++good;
+        }
+        if (chk >= 2 && good == chk) {
+            if (st != kLibEntrySize) Log("장신구 라이브러리 원소 크기 0x%zX → 0x%zX", kLibEntrySize, st);
+            kLibEntrySize = st; done = true; return;
+        }
+    }
+    Log("장신구 라이브러리 원소 크기를 찾지 못함 (기본 0x%zX)", kLibEntrySize);
+    done = true;
+}
+uint8_t** LibVec() {
+    uint8_t** v = At<uint8_t**>(D_TrinketLib);
+    if (D_TrinketLib && v[0] && v[1] > v[0]) CalibrateLibStride(v[0], v[1]);
+    return v;
+}
 
 void CalibrateRarity() {
     g_rarityOffset = -1;
@@ -378,6 +438,17 @@ std::unordered_map<uint32_t, int> ClassSet() {
     if (!b || e <= b || e - b > 500) return set;
     for (uint8_t** p = b; p != e; ++p) if (*p && Readable(*p + 0xD4, 4)) set[*(uint32_t*)(*p + 0xD4)] = 1;
     return set;
+}
+bool IsHeroClassPtr(uint8_t* cls) {
+    if (!cls) return false;
+    for (uint64_t d : { D_HeroClasses, D_NetHeroClasses }) {
+        if (!d) continue;
+        uint8_t*** v = At<uint8_t***>(d);
+        uint8_t** b = v[0]; uint8_t** e = v[1];
+        if (!b || e <= b || e - b > 500) continue;
+        for (uint8_t** p = b; p != e; ++p) if (*p == cls) return true;
+    }
+    return false;
 }
 
 // ---- 장신구 정의 파일(JSON) — 윈도우판과 같음 ----
@@ -543,22 +614,134 @@ bool HashVerified() {
     return g_hashOk == 1;
 }
 
-// 실행 파일 확인: LC_UUID 가 우리가 분석한 빌드와 같은지
-bool CheckBinary(char* uuidOut) {
+// ---- 주소 자동 인식: 게임 실행 파일의 심볼 테이블에서 이름으로 찾음 ----------------
+// match: 'p' = 디맹글한 이름이 needle 로 시작, 'e' = 정확히 같음, 'r' = 날 심볼 이름이 정확히 같음,
+//        'a' = needle 의 '|' 로 나눈 조각이 모두 들어 있음. key = 날 심볼에 그대로 들어 있는 식별자(빠른 거르기)
+struct SymDef { uint64_t* dst; char match; const char* key; const char* needle; int64_t add; bool required; };
+const SymDef kSyms[] = {
+    { &A_DrawUnequip,  'p', "DrawUnequipButton", "TownUI::Panel::RealmInventory::DrawUnequipButton(", 0, true },
+    { &A_RIDragRender, 'p', "RealmInventoryItemDragObject", "RealmInventoryItemDragObject::Render() const", 0, false },
+    { &A_Palette,      'p', "ShowCharacterPaletteButton", "UI::Panel::CharacterDisplay::ShowCharacterPaletteButton(", 0, false },
+    { &A_RosterPre,    'p', "RosterList", "TownUI::Panel::RosterList::PreChildrenShowInternal(", 0, false },
+    { &A_HeroSlotPre,  'p', "HeroSlot", "TownUI::Panel::HeroSlot::PreChildrenShowInternal(", 0, false },
+    { &A_QuestSelPre,  'p', "QuestSelect", "TownUI::Panel::QuestSelect::PreChildrenShowInternal(", 0, false },
+    { &A_ProvPre,      'p', "ProvisionSelect", "TownUI::Panel::ProvisionSelect::PreChildrenShowInternal(", 0, false },
+    { &A_ModalRender,  'p', "ModalDialog", "ModalDialog::Render(", 0, false },
+    { &A_HeroDrag,     'p', "HeroDragObject", "HeroDragObject::Render(", 0, false },
+    { &A_OpenSave,     'p', "open_SaveData", "open_SaveData(", 0, false },
+    { &A_RemoveSave,   'p', "RemoveSaveFile", "RemoveSaveFile(", 0, false },
+    { &A_TransformTop, 'p', "Transform_Top", "Transform_Top(", 0, true },
+    { &A_GetSlotIface, 'a', "GetHeroSlotInterface", "HeroSlot::GetHeroSlotInterface(", 0, false },
+    { &A_ModalVisible, 'p', "ModalDialog", "ModalDialog::IsVisible() const", 0, false },
+    { &A_ConfirmInst,  'p', "ConfirmDialog", "ConfirmDialog::System::Instance(", 0, false },
+    { &A_ConfirmQueue, 'p', "ConfirmDialog", "ConfirmDialog::System::GetIsEntriesInQueue(", 0, false },
+    { &A_SetStatus,    'p', "SetStatus", "Roster::System::SetStatus(", 0, false },
+    { &A_RefreshParty, 'a', "RefreshParty", "QuestSelect::RefreshParty(", 0, false },
+    { &A_ItemCopy,     'p', "Item", "Inventory::Item::Item(Inventory::Item const&)", 0, true },
+    { &A_ItemDtor,     'p', "Item", "Inventory::Item::~Item(", 0, true },
+    { &A_SwitchItems,  'p', "SwitchItems", "Inventory::System::SwitchItems(", 0, true },
+    { &A_TrinketBuffs, 'p', "UpdateTrinketBuffs", "Actor::UpdateTrinketBuffs(", 0, true },
+    { &A_Localize,     'p', "LocalizeStringFromId", "Localization::LocalizeStringFromId(char const*)", 0, true },
+    { &A_AudioEvent,   'p', "Audio_Event", "Audio_Event(char const*, bool", 0, false },
+    { &A_UsingPad,     'p', "Input_IsUsingController", "Input_IsUsingController(", 0, true },
+    { &A_StoreInv,     'p', "GetStoreInventorySystem", "Provision::System::GetStoreInventorySystem(", 0, false },
+    { &A_RaidInv,      'p', "GetNextRaidInventorySystem", "Provision::System::GetNextRaidInventorySystem(", 0, false },
+    { &A_GoldValue,    'p', "GetPurchaseGoldValueOfItem", "Provision::System::GetPurchaseGoldValueOfItem(", 0, false },
+    { &A_ShardValue,   'p', "GetPurchaseShardValueOfItem", "Provision::System::GetPurchaseShardValueOfItem(", 0, false },
+    { &A_BuyLambda,    'a', "ProvisionSelect", "ProvisionSelect|$_1|>::operator()(unsigned int&&)", 0, false },
+    { &A_EstateAmount, 'p', "GetAmount", "Estate::System::GetAmount(unsigned int) const", 0, false },
+    { &A_CurrencyHash, 'p', "CurrencyType", "Estate::CurrencyType::operator unsigned int() const", 0, false },
+    { &D_KGold,        'e', "k_gold", "Estate::CurrencyTypes::k_gold", 0, false },
+    { &D_Campaign,     'e', "g_pCurrent", "Campaign::g_pCurrent", 0, true },
+    { &D_App,          'r', "_App", "_App", 0, true },
+    { &D_TrinketLib,   'e', "g_TrinketClasses", "Trinket::g_TrinketClasses", 0, true },
+    { &D_Rarities,     'e', "g_Rarities", "Trinket::g_Rarities", 0, true },
+    { &D_HeroClasses,  'r', "g_hero_classes", "_g_hero_classes", 0, true },
+    { &D_NetHeroClasses,'r', "g_networked_hero_classes", "_g_networked_hero_classes", 0, false },
+    { &VT_RIDragData,  'e', "RealmInventoryItemDragData", "vtable for RealmInventoryItemDragData", 0x10, false },
+    { &VT_HeroDragData,'e', "HeroDragData", "vtable for HeroDragData", 0x10, false },
+    { &VT_QSlotIface,  'e', "QuestSelectHeroSlotInterface", "vtable for QuestSelectHeroSlotInterface", 0x10, false },
+};
+constexpr size_t kSymCount = sizeof kSyms / sizeof kSyms[0];
+
+bool SymMatch(const SymDef& d, const char* raw, const char* dem) {
+    switch (d.match) {
+    case 'r': return strcmp(raw, d.needle) == 0;
+    case 'e': return dem && strcmp(dem, d.needle) == 0;
+    case 'p': return dem && strncmp(dem, d.needle, strlen(d.needle)) == 0;
+    case 'a': {
+        if (!dem) return false;
+        const char* n = d.needle;
+        while (*n) {
+            const char* bar = strchr(n, '|');
+            std::string part(n, bar ? (size_t)(bar - n) : strlen(n));
+            if (!strstr(dem, part.c_str())) return false;
+            n = bar ? bar + 1 : n + part.size();
+        }
+        return true;
+    }
+    }
+    return false;
+}
+
+// 반환: 필수 항목을 모두 찾았는지. found/total 에 개수
+bool ResolveSymbols(int* found) {
     const mach_header_64* mh = (const mach_header_64*)_dyld_get_image_header(0);
+    *found = 0;
     if (!mh || mh->magic != MH_MAGIC_64) return false;
     g_slide = _dyld_get_image_vmaddr_slide(0);
+    const symtab_command* st = nullptr; const segment_command_64* linkedit = nullptr;
     const uint8_t* p = (const uint8_t*)(mh + 1);
     for (uint32_t i = 0; i < mh->ncmds; ++i) {
         const load_command* lc = (const load_command*)p;
-        if (lc->cmd == LC_UUID) {
-            const uint8_t* u = ((const uuid_command*)lc)->uuid;
-            for (int k = 0; k < 16; ++k) sprintf(uuidOut + k * 2, "%02X", u[k]);
-            return memcmp(u, kUUID, 16) == 0;
-        }
+        if (lc->cmd == LC_SYMTAB) st = (const symtab_command*)lc;
+        if (lc->cmd == LC_SEGMENT_64 && strcmp(((const segment_command_64*)lc)->segname, "__LINKEDIT") == 0) linkedit = (const segment_command_64*)lc;
         p += lc->cmdsize;
     }
-    return false;
+    if (!st || !linkedit) { Log("심볼 테이블이 없음"); return false; }
+    const uint8_t* le = (const uint8_t*)(uintptr_t)(linkedit->vmaddr + g_slide - linkedit->fileoff);
+    const nlist_64* syms = (const nlist_64*)(le + st->symoff);
+    const char* strs = (const char*)(le + st->stroff);
+    std::vector<uint64_t> val(kSymCount, 0);
+    std::vector<int> cnt(kSymCount, 0);
+    std::vector<std::string> first(kSymCount);
+    char* buf = nullptr; size_t bufLen = 0;
+    for (uint32_t i = 0; i < st->nsyms; ++i) {
+        const nlist_64& s = syms[i];
+        if ((s.n_type & N_STAB) || (s.n_type & N_TYPE) != N_SECT || !s.n_value) continue;
+        if (s.n_un.n_strx >= st->strsize) continue;
+        const char* raw = strs + s.n_un.n_strx;
+        const char* dem = nullptr;
+        bool tried = false;
+        for (size_t k = 0; k < kSymCount; ++k) {
+            const SymDef& d = kSyms[k];
+            if (!strstr(raw, d.key)) continue;
+            if (!tried && raw[0] == '_' && raw[1] == '_' && raw[2] == 'Z') {
+                tried = true;
+                int status = 0;
+                char* out = abi::__cxa_demangle(raw + 1, buf, &bufLen, &status);
+                if (status == 0 && out) { buf = out; dem = buf; }
+            }
+            if (!SymMatch(d, raw, dem)) continue;
+            std::string name = dem ? dem : raw;
+            if (cnt[k] == 0) { val[k] = s.n_value; first[k] = name; cnt[k] = 1; }
+            else if (s.n_value != val[k] && name != first[k]) ++cnt[k];   // 다른 함수가 또 맞음 → 모호
+        }
+    }
+    free(buf);
+    bool required = true;
+    for (size_t k = 0; k < kSymCount; ++k) {
+        const SymDef& d = kSyms[k];
+        if (cnt[k] == 1) { *d.dst = val[k] + d.add; ++*found; }
+        else {
+            *d.dst = 0;
+            Log("  [자동 인식] %s: %s%s", d.needle, cnt[k] ? "여러 개가 맞음" : "없음", d.required ? " - 필수" : "");
+            if (d.required) required = false;
+        }
+    }
+    Log("[자동 인식] 심볼 %d/%zu 찾음 (슬라이드 0x%lX)", *found, kSymCount, (long)g_slide);
+    ReportSet("sigs", "%d/%zu", *found, kSymCount);
+    return required;
 }
 
 void* g_lam[5];
@@ -568,13 +751,12 @@ uint32_t Hash(const char* s) { return HashImpl(s); }
 bool Supported() { return g_ok; }
 
 bool Install() {
-    char uuid[40] = "?";
-    if (!CheckBinary(uuid)) {
-        Log("게임 버전이 다릅니다 (UUID %s). 게임 연동 기능을 끕니다.", uuid);
-        ReportSet("game", "WRONG-VERSION-%.8s", uuid);
+    int found = 0;
+    if (!ResolveSymbols(&found)) {
+        Log("게임 버전을 인식하지 못했습니다 (필수 심볼 없음). 게임 연동 기능을 끕니다.");
+        ReportSet("game", "WRONG-VERSION-SYM%d", found);
         return false;
     }
-    Log("게임 실행 파일 확인 OK (슬라이드 0x%lX)", (long)g_slide);
     g_trinketType = Hash("trinket");
     Log("게임 연동 후킹:");
     bool a = HookOne(A_DrawUnequip, (void*)&Hook_DrawUnequip, (void**)&o_DrawUnequip, "장신구 가방");
@@ -589,7 +771,7 @@ bool Install() {
     bool s1 = HookOne(A_OpenSave, (void*)&Hook_OpenSave, (void**)&o_OpenSave, "세이브 슬롯 감지");
     HookOne(A_RemoveSave, (void*)&Hook_RemoveSave, (void**)&o_RemoveSave, "영지 삭제 감지");
     (void)s1;
-    g_bulkOk = true;
+    g_bulkOk = A_StoreInv && A_RaidInv && A_GoldValue && A_ShardValue && A_BuyLambda && A_EstateAmount && A_CurrencyHash && D_KGold;
     g_ok = a;
     ReportSet("game", g_ok ? "OK" : "BAG-HOOK-FAIL");
     ReportSet("hooks", "%d/%d", g_hookOk, g_hookAll);
@@ -643,7 +825,7 @@ void BeginFrame() {
     if (g_modalSeen != g_modalLast) { g_modal = g_modalPending; g_modalLast = g_modalSeen; } else g_modal = 0;
     g_modalPending = 0;
     if (g_ok) {      // 확인 창(ConfirmDialog) 대기열
-        void* cd = At<FnStatic>(A_ConfirmInst)();
+        void* cd = (A_ConfirmInst && A_ConfirmQueue) ? At<FnStatic>(A_ConfirmInst)() : nullptr;
         if (cd && At<FnBool>(A_ConfirmQueue)(cd)) g_modal = 1.0f;
     }
     if (g_townSeen != g_townLast) { g_town = true; g_townMiss = 0; g_townLast = g_townSeen; }
@@ -704,7 +886,7 @@ bool ProvisionVisible() { return g_provVisible; }
 
 // ---- 원정 준비: 골드 아이템 일괄 구매 ----
 uint8_t* Provision() { uint8_t* c = Campaign(); return c ? c + kProvision : nullptr; }
-unsigned GoldHash() { return At<FnCurHash>(A_CurrencyHash)(At<void*>(D_KGold)); }
+unsigned GoldHash() { return (A_CurrencyHash && D_KGold) ? At<FnCurHash>(A_CurrencyHash)(At<void*>(D_KGold)) : Hash("gold"); }
 int Gold() {
     if (!g_ok) return -1;
     uint8_t* es = EstateSys(); if (!es) return -1;
@@ -907,6 +1089,7 @@ bool GetHero(int guid, HeroInfo* out) {
 PartyResult LoadParty(const int guids[4]) {
     PartyResult r;
     if (!g_ok)            { r.error = Txt::T("err_off"); return r; }
+    if (g_heroCal < 0 || !A_SetStatus || !A_RefreshParty || !VT_QSlotIface) { r.error = Txt::T("err_version"); return r; }
     if (!g_party.visible) { r.error = Txt::T("err_party_screen"); return r; }
     uint8_t* roster = RosterSys();
     if (!roster) { r.error = Txt::T("err_data"); return r; }
@@ -1000,7 +1183,7 @@ bool ClassesCompatible(const TrinketInfo& a, const TrinketInfo& b) {
     return false;
 }
 void PlaySound(const char* path) {
-    if (!g_ok || !path) return;
+    if (!g_ok || !path || !A_AudioEvent) return;
     alignas(16) unsigned char fn[64] = {};       // 빈 std::function (libc++: 호출한 쪽이 소멸 → 비어 있으니 아무 일 없음)
     At<FnAudio>(A_AudioEvent)(path, false, fn);
 }
@@ -1046,6 +1229,8 @@ int TrinketSlots() {
 EquipResult EquipPreset(void* hero, const char* const* ids, int n) {
     EquipResult r;
     if (!g_ok || !hero) { r.error = Txt::T("err_off"); return r; }
+    HeroInv(hero);   // 영웅 오프셋 확인 (처음 한 번)
+    if (g_heroCal != 1) { r.error = Txt::T("err_version"); return r; }
     if (!InTown())      { r.error = Txt::T("town_only_load"); return r; }
     if (!HashVerified()) { r.error = Txt::T("err_format"); return r; }
     uint8_t* est = EstateInv();

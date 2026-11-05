@@ -21,7 +21,7 @@ CXXFLAGS="-std=c++17 -O2 -DNDEBUG -DUNICODE -D_UNICODE -DSDL_MAIN_HANDLED -Ithir
 echo "빌드 완료: $OUT/SDL2.dll (로더)"
 
 # 2) 기능 본체: mods\<모드>\dd_preset_tools\dd_preset_tools.dll
-SRCS="src/main.cpp src/overlay.cpp src/presets.cpp src/gfx.cpp src/game.cpp src/ui_preset.cpp src/ui_heropreset.cpp src/ui_bulkbuy.cpp src/text.cpp src/hero_presets.cpp \
+SRCS="src/main.cpp src/sigscan.cpp src/overlay.cpp src/presets.cpp src/gfx.cpp src/game.cpp src/ui_preset.cpp src/ui_heropreset.cpp src/ui_bulkbuy.cpp src/text.cpp src/hero_presets.cpp \
   $IMGUI/imgui.cpp $IMGUI/imgui_draw.cpp $IMGUI/imgui_tables.cpp $IMGUI/imgui_widgets.cpp $IMGUI/imgui_demo.cpp \
   $IMGUI/backends/imgui_impl_sdl2.cpp $IMGUI/backends/imgui_impl_opengl2.cpp $IMGUI/backends/imgui_impl_opengl3.cpp"
 
