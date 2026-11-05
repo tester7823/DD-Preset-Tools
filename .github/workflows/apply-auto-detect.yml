@@ -20,12 +20,14 @@ jobs:
           set -e
           git config user.name "tester7823"
           git config user.email "coin7097@gmail.com"
+          ORIG=$(git rev-parse HEAD)
           if [ -f .github/workflows/auto-detect-patches.tar.xz ]; then
             mkdir -p /tmp/p && tar -xJf .github/workflows/auto-detect-patches.tar.xz -C /tmp/p
-            git rm -q .github/workflows/auto-detect-patches.tar.xz .github/workflows/apply-auto-detect.yml
-            git commit -q -m "Remove one-time upload files"
             git am /tmp/p/*.patch
-            git push origin HEAD:auto-detect
+            git reset -q --soft "$ORIG"
+            git rm -q --cached .github/workflows/build.yml && rm -f .github/workflows/build.yml
+            git commit -q -m "Auto-detect game builds: Windows signature scan, macOS symbol lookup"
+            git push -f origin HEAD:auto-detect
           fi
           echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
   windows:
