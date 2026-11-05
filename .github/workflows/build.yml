@@ -1,0 +1,48 @@
+name: build
+
+on:
+  push:
+    branches: [ main, auto-detect ]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  windows:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: llvm-mingw
+        run: |
+          V=20241119
+          curl -sSL -o llvm-mingw.tar.xz "https://github.com/mstorsjo/llvm-mingw/releases/download/${V}/llvm-mingw-${V}-ucrt-ubuntu-20.04-x86_64.tar.xz"
+          mkdir -p "$RUNNER_TEMP/llvm-mingw" && tar -xf llvm-mingw.tar.xz -C "$RUNNER_TEMP/llvm-mingw" --strip-components=1
+          echo "LLVM_MINGW=$RUNNER_TEMP/llvm-mingw" >> "$GITHUB_ENV"
+      - name: build
+        run: |
+          bash ./fetch_deps.sh
+          bash ./build.sh x64
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-x64
+          path: |
+            build/x64/dd_preset_tools.dll
+            build/x64/SDL2.dll
+
+  macos:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - name: deps
+        run: brew install lld
+      - name: build
+        run: |
+          bash ./fetch_deps.sh
+          export PATH="$(brew --prefix lld)/bin:$PATH"
+          export MACOS_SDK="$(xcrun --sdk macosx --show-sdk-path)"
+          bash ./build_mac.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-x86_64
+          path: |
+            build/mac/dd_preset_tools.dylib
+            build/mac/SDL2
