@@ -27,13 +27,14 @@ The Workshop folder also contains `mac_only/` (macOS x86_64 build, runs natively
 2. Enable the mod in the in-game mod list. `uninstall_mac.sh` restores the original.
 3. Problem report: last line of `DarkestDungeon/_osx/trinket_preset.log` (`DDPT-REPORT …`).
 
-Mac sources: `src/mac/` (`loader_mac.cpp` = SDL2 proxy that re-exports `SDL2_orig`, `game_mac.cpp` = game offsets for the macOS build with LC_UUID `52A44181-0EB1-3886-9204-53CF2FB87CD1`, `hook.cpp` = small inline hook, `windows.h`/`win_shim.cpp` = the few Win32 calls the shared code uses). Build: `MACOS_SDK=/path/to/MacOSX12.3.sdk ./build_mac.sh` (clang + lld, works on Linux).
+Mac sources: `src/mac/` (`loader_mac.cpp` = SDL2 proxy that re-exports `SDL2_orig`, `game_mac.cpp` = game access for macOS; functions and data are found by symbol name at start-up, `hook.cpp` = small inline hook, `windows.h`/`win_shim.cpp` = the few Win32 calls the shared code uses). Build: `MACOS_SDK=/path/to/MacOSX12.3.sdk ./build_mac.sh` (clang + lld, works on Linux).
 
 ## How it works
 
 - `src/loader.cpp` → **SDL2.dll** (loader). Forwards every SDL call to `SDL2_orig.dll`. On start it looks for `dd_preset_tools\dd_preset_tools.dll` inside `mods\*` or `workshop\content\262060\*` and loads it. Without it, the loader does nothing.
 - everything else in `src/` → **dd_preset_tools.dll**. Draws the UI with Dear ImGui and calls the game's own functions (equip, party slots, store purchase). Features stay hidden unless the mod is enabled in the in-game mod list.
-- Supported build: Steam 64-bit `Darkest.exe` (timestamp `0x6AB13309`). On other builds, hooks whose code does not match are skipped.
+- **Game updates are detected automatically.** On start the DLL scans `Darkest.exe` for the byte patterns in `src/sigs.inc` (`src/sigscan.cpp`) and reads function/data addresses, the trinket-library entry size and the hero struct offsets from the game's own code. Each pattern must match exactly once; if a required one is missing, game features turn off instead of guessing (the log line `[자동 인식]` lists what failed). The patterns are generated and checked by `tools/sigs/gen_sigs.py` (`DDPT_EXE=…/Darkest.exe python3 tools/sigs/gen_sigs.py`, needs `llvm-objdump`); current table: 2026-10-30 build (timestamp `0x6AE4C882`).
+- macOS: functions/data come from the game's symbol table (demangled names); the trinket-library entry size and hero offsets are calibrated from live data.
 
 ## Repository layout
 

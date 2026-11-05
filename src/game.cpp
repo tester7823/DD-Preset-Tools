@@ -1,5 +1,5 @@
 // 게임 함수 후킹 + 게임 데이터 읽기/쓰기 (MinHook)
-// 대상: Darkest.exe x64, TimeDateStamp 0x6AB13309 (2026-09-21 빌드)
+// 대상: Darkest.exe x64. 주소/오프셋은 실행 시 패턴 스캔(sigscan, sigs.inc)으로 찾음 → 게임 업데이트에 자동 대응
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <cstring>
@@ -11,6 +11,7 @@
 #include "game.h"
 #include "text.h"
 #include "log.h"
+#include "sigscan.h"
 
 namespace Game {
 namespace {
@@ -18,56 +19,51 @@ bool Readable(const void* p, size_t n);
 void ResetReadCache();
 
 // ---- 주소(RVA) --------------------------------------------------------------
-constexpr DWORD kExpectedStamp = 0x6AB13309;
 // 후킹 대상 함수
-constexpr DWORD RVA_DrawUnequipButton  = 0x0069C900;  // TownUI::Panel::RealmInventory::DrawUnequipButton(vec2)
-constexpr DWORD RVA_RIDragRender       = 0x007C4060;  // RealmInventoryItemDragObject::Render
-constexpr DWORD RVA_PaletteButton      = 0x007F1B40;  // UI::Panel::CharacterDisplay::ShowCharacterPaletteButton(vec2, Hero*)
-constexpr DWORD RVA_RosterPreShow      = 0x006A95A0;  // TownUI::Panel::RosterList::PreChildrenShowInternal
-constexpr DWORD RVA_HeroSlotPreShow    = 0x00680F60;  // TownUI::Panel::HeroSlot::PreChildrenShowInternal (슬롯마다)
-constexpr DWORD RVA_QuestSelectPreShow = 0x0068D120;  // TownUI::Panel::QuestSelect::PreChildrenShowInternal (영지 지도)
-constexpr DWORD RVA_ProvisionPreShow   = 0x006890C0;  // ProvisionSelect::PreChildrenShowInternal (원정 준비 화면)
-constexpr DWORD RVA_ProvisionBuyOne    = 0x0068B7C0;  // 원정 준비 상점 좌클릭 람다 _Do_call (캡처: +8 ProvisionSelect, +0x10 상점, +0x18 가방)
-constexpr DWORD RVA_ItemGoldPrice      = 0x00571FD0;  // (unused, ItemClass*) → 골드 가격
-constexpr DWORD RVA_ItemShardPrice     = 0x00572080;  // (unused, ItemClass*) → 파편 가격
-constexpr DWORD RVA_ItemClassList      = 0x0117D978;  // vector<ItemClass*>* (+0x40 종류 해시, +0x84 ID 해시)
-constexpr DWORD RVA_GoldHash           = 0x02BA44F0;  // 골드 통화 해시
-constexpr DWORD RVA_ShardHash          = 0x02BA4360;  // 파편 통화 해시
-constexpr DWORD RVA_InputMode          = 0x0117CD94;  // 0 마우스, 1 패드
-constexpr DWORD RVA_InputModeFlag      = 0x01174ADA;
-constexpr DWORD RVA_RosterShowChar     = 0x006A50B0;  // 영웅 목록 원소의 '정보창 열기' 람다 본체 (캡처 = 원소*)
-constexpr DWORD RVA_GamePersist        = 0x02A5C288;  // persist.game (+0x208 적용된 모드 목록 vector, 원소 0xC0: 이름[0x80], 출처[0x40])
-constexpr DWORD RVA_TownRender         = 0x00411BA0;  // 마을 그리기 (this+0x1F18 = 화면 전환 상태, 3/9 이면 전환 중 검은 화면)
-constexpr DWORD RVA_RenderAll          = 0x00271F40;  // 지연 그리기 목록 전체를 그리는 함수 (자막 함수 바로 뒤에 호출됨)
-constexpr DWORD RVA_DrawElement        = 0x002726F0;  // 지연 그리기 목록의 원소 하나 그리기 (원소+0 = 층. 5 일반 UI, 9 툴팁, 12 확인 창/전환)
-constexpr DWORD RVA_ConfirmShow        = 0x007BA940;  // ConfirmDialog::System::Show (this+0x2C = 나타난 정도)
-constexpr DWORD RVA_ModalRender        = 0x00799D20;  // ModalDialog::Render (확인 창). this+0x5C = 나타난 정도
-constexpr DWORD RVA_GlobalFade         = 0x02A5D36C;  // 화면 전체 밝기 (1 = 보임, 0 = 검은 화면), +4 = 목표값
-constexpr DWORD RVA_SubtitleRender     = 0x00610DC0;  // 자막 그리기 (shared/subtitles/subtitle_bg.png)
-constexpr DWORD RVA_HeroDragRender     = 0x007C3320;  // HeroDragObject::Render
-constexpr DWORD RVA_SetInParty         = 0x005817C0;  // Roster::System::SetInParty(entry, 0/1)
-constexpr DWORD RVA_RefreshParty       = 0x0068BC00;  // QuestSelect::RefreshParty (파티 이름 갱신)
-constexpr DWORD RVA_TownUIPtr          = 0x0117DBE0;  // TownUI* (EmbarkParty = +0x3640)
-constexpr DWORD RVA_VT_QSlotIface      = 0x00ED1D60;  // QuestSelectHeroSlotInterface vtable
-constexpr DWORD RVA_VT_HeroDragData    = 0x00ECF420;  // HeroDragData vtable
+DWORD RVA_DrawUnequipButton  = 0;  // TownUI::Panel::RealmInventory::DrawUnequipButton(vec2)
+DWORD RVA_RIDragRender       = 0;  // RealmInventoryItemDragObject::Render
+DWORD RVA_PaletteButton      = 0;  // UI::Panel::CharacterDisplay::ShowCharacterPaletteButton(vec2, Hero*)
+DWORD RVA_RosterPreShow      = 0;  // TownUI::Panel::RosterList::PreChildrenShowInternal
+DWORD RVA_HeroSlotPreShow    = 0;  // TownUI::Panel::HeroSlot::PreChildrenShowInternal (슬롯마다)
+DWORD RVA_QuestSelectPreShow = 0;  // TownUI::Panel::QuestSelect::PreChildrenShowInternal (영지 지도)
+DWORD RVA_ProvisionPreShow   = 0;  // ProvisionSelect::PreChildrenShowInternal (원정 준비 화면)
+DWORD RVA_ProvisionBuyOne    = 0;  // 원정 준비 상점 좌클릭 람다 _Do_call (캡처: +8 ProvisionSelect, +0x10 상점, +0x18 가방)
+DWORD RVA_ItemGoldPrice      = 0;  // (unused, ItemClass*) → 골드 가격
+DWORD RVA_ItemShardPrice     = 0;  // (unused, ItemClass*) → 파편 가격
+DWORD RVA_ItemClassList      = 0;  // vector<ItemClass*>* (+0x40 종류 해시, +0x84 ID 해시)
+DWORD RVA_InputMode          = 0;  // 0 마우스, 1 패드
+DWORD RVA_InputModeFlag      = 0;
+DWORD RVA_RosterShowChar     = 0;  // 영웅 목록 원소의 '정보창 열기' 람다 본체 (캡처 = 원소*)
+DWORD RVA_GamePersist        = 0;  // persist.game (+0x208 적용된 모드 목록 vector, 원소 0xC0: 이름[0x80], 출처[0x40])
+DWORD RVA_TownRender         = 0;  // 마을 그리기 (this+0x1F18 = 화면 전환 상태, 3/9 이면 전환 중 검은 화면)
+DWORD RVA_RenderAll          = 0;  // 지연 그리기 목록 전체를 그리는 함수 (자막 함수 바로 뒤에 호출됨)
+DWORD RVA_DrawElement        = 0;  // 지연 그리기 목록의 원소 하나 그리기 (원소+0 = 층. 5 일반 UI, 9 툴팁, 12 확인 창/전환)
+DWORD RVA_ConfirmShow        = 0;  // ConfirmDialog::System::Show (this+0x2C = 나타난 정도)
+DWORD RVA_ModalRender        = 0;  // ModalDialog::Render (확인 창). this+0x5C = 나타난 정도
+DWORD RVA_GlobalFade         = 0;  // 화면 전체 밝기 (1 = 보임, 0 = 검은 화면), +4 = 목표값
+DWORD RVA_SubtitleRender     = 0;  // 자막 그리기 (shared/subtitles/subtitle_bg.png)
+DWORD RVA_HeroDragRender     = 0;  // HeroDragObject::Render
+DWORD RVA_SetInParty         = 0;  // Roster::System::SetInParty(entry, 0/1)
+DWORD RVA_RefreshParty       = 0;  // QuestSelect::RefreshParty (파티 이름 갱신)
+DWORD RVA_TownUIPtr          = 0;  // TownUI* (EmbarkParty = +0x3640)
+DWORD RVA_VT_QSlotIface      = 0;  // QuestSelectHeroSlotInterface vtable
+DWORD RVA_VT_HeroDragData    = 0;  // HeroDragData vtable
 // 호출하는 게임 함수
-constexpr DWORD RVA_InvSetItem         = 0x005D3EB0;  // Inventory::System::SetItem(slot, Item&) — 칸과 item 을 맞바꿈
-constexpr DWORD RVA_ItemCopy           = 0x003CA5F0;  // Item 복사 생성
-constexpr DWORD RVA_Dtor_242400        = 0x00242400;  // Item 소멸 단계들 (SetItem 이 임시 Item 에 쓰는 순서 그대로)
-constexpr DWORD RVA_Dtor_232d70        = 0x00232D70;
-constexpr DWORD RVA_Dtor_3839b0        = 0x003839B0;
-constexpr DWORD RVA_HeroRefresh        = 0x0047CA10;  // 장비 변경 후 영웅 갱신 (장신구 효과 재계산)
-constexpr DWORD RVA_Localize           = 0x0043C770;  // 문자열 테이블 조회
-constexpr DWORD RVA_PlaySound          = 0x0022FAC0;  // 효과음 재생 (이벤트 경로, -, std::function*)
+DWORD RVA_InvSetItem         = 0;  // Inventory::System::SetItem(slot, Item&) — 칸과 item 을 맞바꿈
+DWORD RVA_ItemCopy           = 0;  // Item 복사 생성
+DWORD RVA_HeroRefresh        = 0;  // 장비 변경 후 영웅 갱신 (장신구 효과 재계산)
+DWORD RVA_Localize           = 0;  // 문자열 테이블 조회
+DWORD RVA_PlaySound          = 0;  // 효과음 재생 (이벤트 경로, -, std::function*)
 // 전역 데이터
-constexpr DWORD RVA_MatrixCurrent      = 0x01174B78;  // 현재 UI 변환 행렬 float[16]
-constexpr DWORD RVA_SortButtonSpacing  = 0x02B7CD90;  // realm_inventory_layout.sort_button_spacing
-constexpr DWORD RVA_PaletteIconOffset  = 0x02BEED60;  // 캐릭터 화면 팔레트 버튼 그림 오프셋
-constexpr DWORD RVA_CampaignPtr        = 0x0117D9B8;  // Campaign*
-constexpr DWORD RVA_AltModeFlag        = 0x02A5C08B;  // 1 이면 다른 저장 슬롯(+0x68 이동) 사용
-constexpr DWORD RVA_TrinketLibBegin    = 0x02C2AA20;  // vector<TrinketClass> (0x428 바이트)
-constexpr DWORD RVA_RarityBegin        = 0x02C2AA38;  // vector<Rarity> (0x4C 바이트)
-constexpr DWORD RVA_HeroClassBegin     = 0x02C2A7B8;  // vector<HeroClass*> (대체 모드: 0x2C2A798), 직업 해시 +0xD4
+DWORD RVA_ItemDtor             = 0;  // Inventory::Item::~Item
+DWORD RVA_HeroClassBeginAlt    = 0;  // 대체 모드의 vector<HeroClass*>
+DWORD RVA_MatrixCurrent      = 0;  // 현재 UI 변환 행렬 float[16]
+DWORD RVA_SortButtonSpacing  = 0;  // realm_inventory_layout.sort_button_spacing
+DWORD RVA_CampaignPtr        = 0;  // Campaign*
+DWORD RVA_AltModeFlag        = 0;  // 1 이면 다른 저장 슬롯(+0x68 이동) 사용
+DWORD RVA_TrinketLibBegin    = 0;  // vector<TrinketClass> (0x428 바이트)
+DWORD RVA_RarityBegin        = 0;  // vector<Rarity> (0x4C 바이트)
+DWORD RVA_HeroClassBegin     = 0;  // vector<HeroClass*> (대체 모드: 0x2C2A798), 직업 해시 +0xD4
 
 const unsigned char kSig_DrawUnequip[] = { 0x48,0x8B,0xC4, 0x48,0x89,0x58,0x08, 0x48,0x89,0x70,0x18, 0x48,0x89,0x50,0x10, 0x55,0x57 };
 const unsigned char kSig_RIDragRender[] = { 0x48,0x89,0x5C,0x24,0x08, 0x57, 0x48,0x83,0xEC,0x30, 0x48,0x8B,0x79,0x08 };
@@ -87,7 +83,14 @@ const unsigned char kSig_HeroDrag[] = { 0x48,0x8B,0xC4,0x55,0x53,0x56,0x57,0x41,
 const unsigned char kSig_RosterPre[] = { 0x48,0x8B,0xC4, 0x55,0x53,0x56,0x57, 0x41,0x56, 0x41,0x57, 0x48,0x8D,0xA8,0xD8,0xF8,0xFF,0xFF };
 
 constexpr size_t kItemSize = 0x5A8;
-constexpr size_t kLibEntrySize = 0x428;
+size_t kLibEntrySize = 0x488;          // 장신구 라이브러리 원소 크기 (게임 코드에서 읽음; 0x428 → 0x488 로 바뀐 적 있음)
+// 영웅/로스터 구조체 오프셋 (게임 코드에서 읽음; 2026-10 패치에서 0x70 밀림)
+DWORD kHeroInv = 0x1280;               // Hero → Inventory::System (로스터 원소 기준은 +8)
+DWORD kHeroClass = 0x1320;             // Hero → HeroClass*
+DWORD kHeroGuid = 0x137C;              // Hero → guid
+DWORD kHeroAppearance = 0xB68;         // Hero → 외형 번호
+DWORD kEntryStatus = 0x15B0;           // 로스터 원소 → 상태 (0 대기, 1 파티)
+DWORD kConfirmFade = 0x3C;             // ConfirmDialog::System → 나타난 정도
 constexpr size_t kRaritySize = 0x4C;
 
 BYTE* g_base = nullptr;
@@ -127,6 +130,7 @@ HeroDragState g_hdragPending, g_hdrag;   unsigned g_hdragSeen = 0, g_hdragLast =
 PartyState g_partyPending, g_party;      unsigned g_qsSeen = 0, g_qsLast = 0;
 void* g_questSelect = nullptr;
 bool g_bulkOk = false;
+bool g_partyOk = false;   // 파티 프리셋에 필요한 주소를 모두 찾았는지
 float g_screenVis = 1.0f;
 bool g_qsRecent = false;
 volatile float g_subAlpha = 0; unsigned g_subSeen = 0, g_subLast = 0;
@@ -188,15 +192,14 @@ void __fastcall Hook_Palette(void* self, unsigned long long packedPos, void* her
     h.visible = true;
     h.xf = CurrentXform();
     ImVec2 p = Unpack(packedPos);
-    const float* off = At<const float*>(RVA_PaletteIconOffset);
     h.anchor = p;                 // 색상 버튼 그림 위치 = 인자 그대로 (오프셋을 더하면 오른쪽으로 56 밀림)
     h.hero = hero;
     g_heroPending = h; ++g_heroSeen;
     if (!g_logHero) {
         g_logHero = true;
         ImVec2 s = h.xf.ToScreen(h.anchor);
-        Log("영웅 정보창 감지: pos=(%.1f,%.1f) off=(%.1f,%.1f) 화면=(%.1f,%.1f) 배율=%.3f hero=%p",
-            p.x, p.y, off[0], off[1], s.x, s.y, h.xf.Scale(), hero);
+        Log("영웅 정보창 감지: pos=(%.1f,%.1f) 화면=(%.1f,%.1f) 배율=%.3f hero=%p",
+            p.x, p.y, s.x, s.y, h.xf.Scale(), hero);
     }
     o_Palette(self, packedPos, hero);
 }
@@ -205,7 +208,7 @@ void* g_rosterList = nullptr;
 bool g_showHeroOk = false;
 void __fastcall Hook_RosterPre(void* self) { g_rosterList = self; ++g_townSeen; o_RosterPre(self); }
 
-BYTE* EmbarkParty() { BYTE* ui = *At<BYTE**>(RVA_TownUIPtr); return ui ? ui + 0x3640 : nullptr; }
+BYTE* EmbarkParty() { BYTE* ui = RVA_TownUIPtr ? *At<BYTE**>(RVA_TownUIPtr) : nullptr; return ui ? ui + 0x3640 : nullptr; }
 
 // 파티 슬롯(영지 지도 아래 4칸)이 그려질 때: 슬롯 위치 기록
 void __fastcall Hook_HeroSlotPre(void* self) {
@@ -251,7 +254,7 @@ void __fastcall Hook_Modal(void* self) {
 }
 FnSelfOnly o_Confirm = nullptr;
 void __fastcall Hook_Confirm(void* self) {
-    float d = self ? *(float*)((BYTE*)self + 0x2C) : 0.0f;
+    float d = self ? *(float*)((BYTE*)self + kConfirmFade) : 0.0f;
     if (d > 0.0f && d < 100.0f) {
         g_modalPending = std::max(g_modalPending, std::min(1.0f, d));
         ++g_modalSeen;
@@ -286,10 +289,10 @@ bool g_townFadingOut = false;
 bool g_layerDrawn = false;
 unsigned long long g_layerMask = 0, g_layerMaskLogged = ~0ull, g_prevLayerMask = 0;
 int g_drawDepth = 0;           // 게임의 층별 그리기 도중인지
-// 게임은 그릴 요소를 배열(RVA 0x1202520, 0x358 바이트씩)에 쌓은 뒤(개수 RVA 0x2A868A4) 한꺼번에 그림.
+// 게임은 그릴 요소를 배열(RVA_ElemArray, 0x358 바이트씩)에 쌓은 뒤(개수 RVA_ElemCount) 한꺼번에 그림.
 // 자막 함수는 화면 UI 를 다 쌓은 뒤에 불리므로, 자막 함수가 쌓기 시작한 위치 직전에 우리 창을 그리면
 // 패널 위·자막 아래가 됨.
-constexpr DWORD RVA_ElemArray = 0x1202520, RVA_ElemCount = 0x2A868A4, kElemSize = 0x358;
+DWORD RVA_ElemArray = 0, RVA_ElemCount = 0; constexpr DWORD kElemSize = 0x358;
 int g_subStart = -1;           // 이번 프레임 자막 요소의 시작 번호 (-1 = 자막 없음)
 bool g_afterSub = false;       // 이번 프레임에 자막 함수가 이미 불렸는지 (그 뒤로 그리는 것은 자막)
 bool g_underSub = false;       // 이번 프레임에 우리 창을 자막(과 게임의 어두운 막) 아래에 그렸는지
@@ -348,7 +351,7 @@ void __fastcall Hook_Subtitle(void* self) {
     static bool logged = false;
     if (g_subAlpha > 0 && !logged) { logged = true; Log("자막 감지 (상황 %d)", *p); }
     ++g_subSeen;
-    g_subStart = g_subAlpha > 0 ? *(int*)(g_base + RVA_ElemCount) : -1;
+    g_subStart = (g_subAlpha > 0 && RVA_ElemCount) ? *(int*)(g_base + RVA_ElemCount) : -1;
     if (g_subAlpha > 0) g_afterSub = true;
     o_Subtitle(self);
 }
@@ -357,11 +360,11 @@ void __fastcall Hook_QuestSelPre(void* self) { g_questSelect = self; ++g_qsSeen;
 
 void __fastcall Hook_HeroDrag(void* self) {
     BYTE* data = *(BYTE**)((BYTE*)self + 8);
-    if (data && *(void**)data == (void*)(g_base + RVA_VT_HeroDragData)) {
+    if (data && RVA_VT_HeroDragData && *(void**)data == (void*)(g_base + RVA_VT_HeroDragData)) {
         BYTE* hero = *(BYTE**)(data + 8);
         if (hero) {
             g_hdragPending.active = true;
-            g_hdragPending.guid = *(int*)(hero + 0x130C);
+            g_hdragPending.guid = *(int*)(hero + kHeroGuid);
             ++g_hdragSeen;
             if (!g_logHDrag) { g_logHDrag = true; Log("영웅 드래그 감지: guid=%d", g_hdragPending.guid); }
         }
@@ -471,7 +474,8 @@ int g_hookOk = 0, g_hookAll = 0;
 bool HookOne(DWORD rva, const unsigned char* sig, size_t n, void* detour, void** orig, const char* name) {
     BYTE* t = g_base + rva;
     ++g_hookAll;
-    if (memcmp(t, sig, n) != 0) { Log("  %s: 함수 모양이 다름 - 건너뜀", name); return false; }
+    (void)sig; (void)n;   // 주소는 ResolveGame() 이 패턴으로 확인함
+    if (!rva) { Log("  %s: 주소를 찾지 못함 - 건너뜀", name); return false; }
     if (MH_CreateHook(t, detour, orig) != MH_OK || MH_EnableHook(t) != MH_OK) { Log("  %s: 후킹 실패", name); return false; }
     Log("  %s: OK", name);
     ++g_hookOk;
@@ -497,7 +501,7 @@ bool IsTrinket(BYTE* it) { return ItemQty(it) > 0 && ItemType(it) == g_trinketTy
 BYTE* Campaign() { return *At<BYTE**>(RVA_CampaignPtr); }
 bool  AltMode()  { return *At<unsigned char*>(RVA_AltModeFlag) != 0; }
 BYTE* EstateInv() { BYTE* c = Campaign(); return c ? c + (AltMode() ? 0xEF0 : 0xE88) : nullptr; }
-BYTE* HeroInv(void* hero) { return (BYTE*)hero + 0x1210; }
+BYTE* HeroInv(void* hero) { return (BYTE*)hero + kHeroInv; }
 
 bool LooksLikeHeroInv(BYTE* inv) {
     BYTE* b = *(BYTE**)(inv + 8); BYTE* e = *(BYTE**)(inv + 0x10);
@@ -505,7 +509,7 @@ bool LooksLikeHeroInv(BYTE* inv) {
     size_t n = (size_t)(e - b) / kItemSize;
     return n >= 1 && n <= 8;
 }
-// 영웅 목록의 각 영웅 인벤토리. 게임 코드는 원소+0x1218 을 쓰지만, 원소가 Hero* 자체인 경우(+0x1210)도 있어 둘 다 확인
+// 영웅 목록의 각 영웅 인벤토리. 게임 코드는 원소+(kHeroInv+8) 을 쓰지만, 원소가 Hero* 자체인 경우(+kHeroInv)도 있어 둘 다 확인
 template <class F> void ForEachRosterInv(F f) {
     BYTE* c = Campaign(); if (!c) return;
     BYTE* r = c + (AltMode() ? 0x728 : 0);
@@ -513,20 +517,14 @@ template <class F> void ForEachRosterInv(F f) {
     if (!b || e < b || e - b > 2000 || (e > b && !Readable(b, (size_t)(e - b) * sizeof(BYTE*)))) return;
     for (BYTE** p = b; p != e; ++p) {
         BYTE* entry = *p;
-        if (!entry || !Readable(entry + 0x1210, 0x20)) continue;   // 불러오는 도중 등 아직 준비 안 된 영웅은 건너뜀
-        if (LooksLikeHeroInv(entry + 0x1218)) f(entry + 0x1218);
-        else if (LooksLikeHeroInv(entry + 0x1210)) f(entry + 0x1210);
+        if (!entry || !Readable(entry + kHeroInv, 0x20)) continue;   // 불러오는 도중 등 아직 준비 안 된 영웅은 건너뜀
+        if (LooksLikeHeroInv(entry + kHeroInv + 8)) f(entry + kHeroInv + 8);
+        else if (LooksLikeHeroInv(entry + kHeroInv)) f(entry + kHeroInv);
     }
 }
 
-// 임시 Item 소멸 (SetItem 이 자신의 임시 Item 에 하는 순서 그대로)
-void DestroyItem(BYTE* it) {
-    At<FnVoidPtr>(RVA_Dtor_242400)(it + 0x580);
-    At<FnVoidPtr>(RVA_Dtor_242400)(it + 0xE0);
-    At<FnVoidPtr>(RVA_Dtor_232d70)(it + 0xB8);
-    At<FnVoidPtr>(RVA_Dtor_242400)(it + 0xA0);
-    At<FnVoidPtr2>(RVA_Dtor_3839b0)(it + 0x90, it + 0x90);
-}
+// 임시 Item 소멸 (게임의 Inventory::Item::~Item)
+void DestroyItem(BYTE* it) { At<FnVoidPtr>(RVA_ItemDtor)(it); }
 
 // 장신구 라이브러리 / 등급
 std::unordered_map<uint32_t, TrinketInfo> g_info;
@@ -567,7 +565,7 @@ bool Readable(const void* p, size_t n) {
 }
 std::unordered_map<uint32_t, int> ClassSet() {
     std::unordered_map<uint32_t, int> set;
-    DWORD rva = AltMode() ? 0x02C2A798 : RVA_HeroClassBegin;
+    DWORD rva = AltMode() ? RVA_HeroClassBeginAlt : RVA_HeroClassBegin;
     BYTE** b = *At<BYTE***>(rva); BYTE** e = *At<BYTE***>(rva + 8);
     if (!b || e <= b || e - b > 500) return set;
     for (BYTE** p = b; p != e; ++p) if (*p) set[*(uint32_t*)(*p + 0xD4)] = 1;
@@ -776,6 +774,81 @@ uint32_t Hash(const char* s) { uint32_t h = 0; while (*s) h = h * 0x35 + (unsign
 
 bool Supported() { return g_ok; }
 
+// ---- 주소 자동 인식 ------------------------------------------------------------
+// 패턴 표: tools/sigs/gen_sigs.py 가 Darkest.exe 를 분석해 만들고, 각 패턴이 정확히 한 곳에만 맞는지 검증함.
+using Sig::SigKind;
+const Sig::SigDef kSigs[] = {
+#include "sigs.inc"
+};
+constexpr size_t kSigCount = sizeof kSigs / sizeof kSigs[0];
+
+struct SigBind { const char* name; DWORD* dst; bool required; };
+const SigBind kBinds[] = {
+    // 필수: 이것들이 없으면 게임 연동 전체를 끔
+    { "DrawUnequipButton", &RVA_DrawUnequipButton, true }, { "MatrixCurrent", &RVA_MatrixCurrent, true },
+    { "SortButtonSpacing", &RVA_SortButtonSpacing, true }, { "CampaignPtr", &RVA_CampaignPtr, true },
+    { "AltModeFlag", &RVA_AltModeFlag, true },             { "InvSetItem", &RVA_InvSetItem, true },
+    { "ItemCopy", &RVA_ItemCopy, true },                   { "ItemDtor", &RVA_ItemDtor, true },
+    { "HeroRefresh", &RVA_HeroRefresh, true },             { "TrinketLibBegin", &RVA_TrinketLibBegin, true },
+    { "RarityBegin", &RVA_RarityBegin, true },             { "HeroClassBegin", &RVA_HeroClassBegin, true },
+    { "HeroClassBeginAlt", &RVA_HeroClassBeginAlt, true }, { "Localize", &RVA_Localize, true },
+    { "InputMode", &RVA_InputMode, true },                 { "InputModeFlag", &RVA_InputModeFlag, true },
+    { "HeroInvOffset", &kHeroInv, true },                  { "HeroClassOffset", &kHeroClass, true },
+    { "HeroGuidOffset", &kHeroGuid, true },                { "AppearanceOffset", &kHeroAppearance, true },
+    { "EntryStatusOffset", &kEntryStatus, true },
+    // 선택: 없으면 해당 기능만 꺼짐
+    { "RIDragRender", &RVA_RIDragRender, false },          { "PaletteButton", &RVA_PaletteButton, false },
+    { "RosterPreShow", &RVA_RosterPreShow, false },        { "HeroSlotPreShow", &RVA_HeroSlotPreShow, false },
+    { "QuestSelectPreShow", &RVA_QuestSelectPreShow, false }, { "ProvisionPreShow", &RVA_ProvisionPreShow, false },
+    { "ProvisionBuyOne", &RVA_ProvisionBuyOne, false },    { "ItemGoldPrice", &RVA_ItemGoldPrice, false },
+    { "ItemShardPrice", &RVA_ItemShardPrice, false },      { "ItemClassList", &RVA_ItemClassList, false },
+    { "RosterShowChar", &RVA_RosterShowChar, false },      { "GamePersist", &RVA_GamePersist, false },
+    { "TownRender", &RVA_TownRender, false },              { "RenderAll", &RVA_RenderAll, false },
+    { "DrawElement", &RVA_DrawElement, false },            { "ConfirmShow", &RVA_ConfirmShow, false },
+    { "ModalRender", &RVA_ModalRender, false },            { "GlobalFade", &RVA_GlobalFade, false },
+    { "SubtitleRender", &RVA_SubtitleRender, false },      { "HeroDragRender", &RVA_HeroDragRender, false },
+    { "SetInParty", &RVA_SetInParty, false },              { "RefreshParty", &RVA_RefreshParty, false },
+    { "TownUIPtr", &RVA_TownUIPtr, false },                { "VT_QSlotIface", &RVA_VT_QSlotIface, false },
+    { "VT_HeroDragData", &RVA_VT_HeroDragData, false },    { "PlaySound", &RVA_PlaySound, false },
+    { "ElemArray", &RVA_ElemArray, false },                { "ElemCount", &RVA_ElemCount, false },
+    { "ConfirmFadeOffset", &kConfirmFade, false },
+};
+
+bool ResolveGame() {
+    static Sig::SigResult res[kSigCount];
+    int good = Sig::ResolveAll(g_base, kSigs, kSigCount, res);
+    auto find = [](const char* n) -> int { for (size_t i = 0; i < kSigCount; ++i) if (!strcmp(kSigs[i].name, n)) return (int)i; return -1; };
+    bool required = true;
+    int missing = 0;
+    for (const SigBind& b : kBinds) {
+        int i = find(b.name);
+        bool ok = i >= 0 && res[i].ok;
+        if (ok) *b.dst = res[i].value;
+        else if (b.dst != &kConfirmFade) *b.dst = 0;    // 오프셋 기본값은 남겨 두지 않음 (잘못 쓰면 위험)
+        if (!ok) {
+            ++missing;
+            Log("  [자동 인식] %s: 실패 (일치 %d곳)%s", b.name, i >= 0 ? res[i].matches : 0, b.required ? " - 필수" : "");
+            if (b.required) required = false;
+        }
+    }
+    {   // 장신구 라이브러리 원소 크기
+        int i = find("LibEntrySize");
+        if (i >= 0 && res[i].ok && res[i].value >= 0x100 && res[i].value <= 0x2000 && res[i].value % 8 == 0) kLibEntrySize = res[i].value;
+        else { Log("  [자동 인식] LibEntrySize: 실패 - 필수"); required = false; ++missing; }
+    }
+    // 오프셋 값이 말이 되는지 (영웅 구조체 안쪽인지)
+    if (kHeroInv < 0x800 || kHeroInv > 0x3000 || kHeroClass < 0x800 || kHeroClass > 0x3000 ||
+        kHeroGuid < 0x800 || kHeroGuid > 0x3000 || kEntryStatus < 0x800 || kEntryStatus > 0x3000 ||
+        kHeroAppearance < 0x100 || kHeroAppearance > 0x3000) {
+        Log("  [자동 인식] 영웅 구조체 오프셋이 이상함 - 끔"); required = false;
+    }
+    g_partyOk = RVA_SetInParty && RVA_RefreshParty && RVA_TownUIPtr && RVA_VT_QSlotIface && RVA_QuestSelectPreShow && RVA_HeroSlotPreShow;
+    Log("[자동 인식] %d/%zu 항목 찾음, 누락 %d. 장신구 원소 0x%zX, 영웅: 인벤 0x%X 직업 0x%X guid 0x%X 외형 0x%X 상태 0x%X",
+        good, kSigCount, missing, kLibEntrySize, kHeroInv, kHeroClass, kHeroGuid, kHeroAppearance, kEntryStatus);
+    ReportSet("sigs", "%d/%zu", good, kSigCount);
+    return required;
+}
+
 bool Install() {
 #if !defined(_WIN64)
     Log("32비트 게임에서는 게임 연동 기능이 꺼집니다.");
@@ -783,8 +856,9 @@ bool Install() {
 #else
     g_base = (BYTE*)GetModuleHandleW(nullptr);
     auto nt = (IMAGE_NT_HEADERS*)(g_base + ((IMAGE_DOS_HEADER*)g_base)->e_lfanew);
-    if (nt->FileHeader.TimeDateStamp != kExpectedStamp) {
-        Log("게임 버전이 다릅니다 (stamp 0x%08lX). 게임 연동 기능을 끕니다.", nt->FileHeader.TimeDateStamp);
+    Log("Darkest.exe stamp 0x%08lX - 주소 자동 인식 시작", nt->FileHeader.TimeDateStamp);
+    if (!ResolveGame()) {
+        Log("게임 버전을 인식하지 못했습니다 (stamp 0x%08lX). 게임 연동 기능을 끕니다.", nt->FileHeader.TimeDateStamp);
         ReportSet("game", "WRONG-VERSION-%08lX", nt->FileHeader.TimeDateStamp);
         return false;
     }
@@ -799,13 +873,13 @@ bool Install() {
     HookOne(RVA_QuestSelectPreShow, kSig_QuestSelPre, sizeof kSig_QuestSelPre, (void*)&Hook_QuestSelPre, (void**)&o_QuestSelPre, "영지 지도");
     HookOne(RVA_ProvisionPreShow, kSig_ProvPre, sizeof kSig_ProvPre, (void*)&Hook_ProvPre, (void**)&o_ProvPre, "원정 준비");
     {
-        bool ok = memcmp(g_base + RVA_ProvisionBuyOne, kSig_ProvBuy, sizeof kSig_ProvBuy) == 0 &&
+        bool ok = RVA_ProvisionBuyOne && RVA_ItemGoldPrice && RVA_ItemShardPrice && RVA_ItemClassList &&
                   memcmp(g_base + RVA_ItemGoldPrice, kSig_Price, sizeof kSig_Price) == 0 &&
                   memcmp(g_base + RVA_ItemShardPrice, kSig_Price, sizeof kSig_Price) == 0;
         g_bulkOk = ok;
         Log("  자동 구매 함수: %s", ok ? "OK" : u8"모양이 다름 - 사용 안 함");
         static const unsigned char kSig_ShowChar[] = { 0x4C,0x8B,0xDC,0x49,0x89,0x5B,0x10,0x49,0x89,0x73,0x18,0x57,0x48,0x81,0xEC,0x10 };
-        g_showHeroOk = memcmp(g_base + RVA_RosterShowChar, kSig_ShowChar, sizeof kSig_ShowChar) == 0;
+        g_showHeroOk = RVA_RosterShowChar && memcmp(g_base + RVA_RosterShowChar, kSig_ShowChar, sizeof kSig_ShowChar) == 0;
         Log("  영웅 정보창 열기: %s", g_showHeroOk ? "OK" : u8"모양이 다름 - 사용 안 함");
     }
     HookOne(RVA_TownRender, kSig_TownRender, sizeof kSig_TownRender, (void*)&Hook_TownRender, (void**)&o_TownRender, "마을 전환");
@@ -893,12 +967,12 @@ void BeginFrame() {
         static ULONGLONG last = GetTickCount64();
         ULONGLONG now = GetTickCount64();
         float dt = std::min(0.1f, (now - last) / 1000.0f); last = now;
-        float cur = *At<float*>(RVA_GlobalFade), tgt = *At<float*>(RVA_GlobalFade + 4);
+        float cur = RVA_GlobalFade ? *At<float*>(RVA_GlobalFade) : 1.0f, tgt = RVA_GlobalFade ? *At<float*>(RVA_GlobalFade + 4) : 1.0f;
         if (!(cur >= 0.0f && cur <= 1.0f) || !(tgt >= 0.0f && tgt <= 1.0f)) g_screenVis = 1.0f;
         else if (tgt < cur - 0.001f || cur <= 0.001f) g_screenVis = std::max(0.0f, std::min(cur, g_screenVis - dt / 0.15f));
         else g_screenVis = std::min(cur, g_screenVis + dt / 0.3f);
         // 마을 화면 전환: TownUI+0xC = 검은 화면 정도 (0 보임 ~ 1 검음). 어두워지기 시작하면 즉시 숨김
-        BYTE* tui = *At<BYTE**>(RVA_TownUIPtr);
+        BYTE* tui = RVA_TownUIPtr ? *At<BYTE**>(RVA_TownUIPtr) : nullptr;
         if (tui && g_town && Readable(tui, 0x10)) {
             static float prevB = 0;
             float b = *(float*)(tui + 0xC);
@@ -960,6 +1034,7 @@ bool ModEnabled() {
     // 게임은 적용된 모드를 project.xml 의 <Title> 로 저장함 → 제목도 비교
     static std::wstring titleFor; static std::string title;
     if (titleFor != parent) { titleFor = parent; title = ReadModTitle(parent); Log("모드 제목: '%s'", title.c_str()); }
+    if (!RVA_GamePersist) return true;   // 모드 목록 위치를 모르면 켜진 것으로 봄
     BYTE* gp = g_base + RVA_GamePersist;
     BYTE* b = *(BYTE**)(gp + 0x208); BYTE* e = *(BYTE**)(gp + 0x210);
     bool on = false;
@@ -995,7 +1070,7 @@ int* WalletAmount(BYTE* c, int hash) {
 int Gold() {
     if (!g_ok) return -1;
     BYTE* c = Campaign(); if (!c) return -1;
-    int* g = WalletAmount(c, *At<int*>(RVA_GoldHash));
+    int* g = WalletAmount(c, (int)Hash("gold"));
     return g ? *g : -1;
 }
 BYTE* FindItemClass(int typeHash, int idHash) {
@@ -1109,7 +1184,7 @@ BulkBuyResult BulkBuyProvisions() {
     if (!g_provVisible || !g_provSelect) { r.error = Txt::T("err_provision_only"); return r; }
     BYTE* c = Campaign(); if (!c) { r.error = Txt::T("err_data"); return r; }
     BYTE* store = c + 0x1618; BYTE* bag = c + 0x15B0;
-    int goldHash = *At<int*>(RVA_GoldHash);
+    int goldHash = (int)Hash("gold");
     using FnPrice = int (__fastcall*)(void*, void*);
     using FnBuy = void (__fastcall*)(void*, unsigned*);
     auto goldPrice = At<FnPrice>(RVA_ItemGoldPrice);
@@ -1252,16 +1327,16 @@ bool GetHero(int guid, HeroInfo* out) {
     BYTE* hero = entry + 8;
     HeroInfo h;
     h.guid = guid;
-    h.status = *(int*)(entry + 0x1540);
+    h.status = *(int*)(entry + kEntryStatus);
     h.name.assign((const char*)(hero + 8), strnlen((const char*)(hero + 8), 64));
-    BYTE* cls = *(BYTE**)(hero + 0x12B0);
+    BYTE* cls = *(BYTE**)(hero + kHeroClass);
     if (cls && Readable(cls, 0x600)) {
         h.classId.assign((const char*)(cls + 8), strnlen((const char*)(cls + 8), 64));
-        // 초상화: 직업의 외형 폴더 목록(0x200 바이트 문자열) 중 영웅의 외형 번호(+0xB68)
+        // 초상화: 직업의 외형 폴더 목록(0x200 바이트 문자열) 중 영웅의 외형 번호(+kHeroAppearance)
         BYTE* vb = *(BYTE**)(cls + 0x5E0); BYTE* ve = *(BYTE**)(cls + 0x5E8);
         int n = (vb && ve > vb) ? (int)((ve - vb) / 0x200) : 0;
         if (n > 0 && n < 64) {
-            int idx = *(int*)(hero + 0xB68);
+            int idx = *(int*)(hero + kHeroAppearance);
             if (idx < 0 || idx >= n) idx = 0;
             const char* folder = (const char*)(vb + idx * 0x200);
             h.portrait = std::string(folder, strnlen(folder, 0x200)) + h.classId + "_portrait_roster.png";
@@ -1276,6 +1351,7 @@ bool GetHero(int guid, HeroInfo* out) {
 PartyResult LoadParty(const int guids[4]) {
     PartyResult r;
     if (!g_ok)            { r.error = Txt::T("err_off"); return r; }
+    if (!g_partyOk)       { r.error = Txt::T("err_version"); return r; }
     if (!g_party.visible) { r.error = Txt::T("err_party_screen"); return r; }
     BYTE* roster = RosterSys();
     BYTE* ep = EmbarkParty();
@@ -1297,7 +1373,7 @@ PartyResult LoadParty(const int guids[4]) {
         if (guids[i] < 0) continue;
         entries[i] = FindEntry(guids[i]);
         if (!entries[i]) { r.error = Txt::T("err_hero_missing"); return r; }
-        int st = *(int*)(entries[i] + 0x1540);
+        int st = *(int*)(entries[i] + kEntryStatus);
         if (st != 0 && st != 1) { r.error = Txt::T("err_hero_unavail"); return r; }
     }
     using FnSetInParty = void (__fastcall*)(void* roster, void* entry, int inParty);
@@ -1363,7 +1439,7 @@ const TrinketInfo& TrinketById(const char* id) { return Trinket(Hash(id)); }
 
 uint32_t HeroClassHash(void* hero) {
     if (!g_ok || !hero) return 0;
-    BYTE* cls = *(BYTE**)((BYTE*)hero + 0x12B0);
+    BYTE* cls = *(BYTE**)((BYTE*)hero + kHeroClass);
     if (!cls || !Readable(cls + 0xD4, 4)) return 0;
     return *(uint32_t*)(cls + 0xD4);
 }
@@ -1381,7 +1457,7 @@ bool ClassesCompatible(const TrinketInfo& a, const TrinketInfo& b) {
 }
 
 void PlaySound(const char* path) {
-    if (!g_ok || !path) return;
+    if (!g_ok || !path || !RVA_PlaySound) return;
     alignas(16) unsigned char cb[64] = {};      // 빈 std::function (콜백 없음)
     At<FnPlaySound>(RVA_PlaySound)(path, 0, cb);
 }
