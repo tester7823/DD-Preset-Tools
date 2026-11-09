@@ -151,7 +151,17 @@ void DrawDialog() {
     }
     size_t planEnd = lines.size();
     lines.push_back(Txt::T("ab_gold_note"));
-    lines.push_back(Txt::T("ab_adjust"));
+    {   // 여러 줄일 수 있음 (\n)
+        std::string adj = Txt::T("ab_adjust");
+        for (size_t q = adj.find("\\n"); q != std::string::npos; q = adj.find("\\n", q)) adj.replace(q, 2, "\n");   // 글자 그대로 \n 인 경우
+        size_t p0 = 0;
+        while (true) {
+            size_t nl = adj.find('\n', p0);
+            lines.push_back(adj.substr(p0, nl == std::string::npos ? std::string::npos : nl - p0));
+            if (nl == std::string::npos) break;
+            p0 = nl + 1;
+        }
+    }
     float cx = bx + 402 * k, ly = by + 182 * k;
     for (size_t i = 0; i < lines.size(); ++i) {
         ImU32 col = i == 0 ? kColText : i < planEnd ? kColTitle : i == planEnd ? kColSub : kColWarn;
