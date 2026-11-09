@@ -13,6 +13,8 @@ Adds new buttons and windows to the town UI:
                      heroes block the lineup until they are available.
   * Auto Buy       - A button on the Provision screen. Buys the list in
                      autobuy.txt in one go (only before you buy anything).
+                     Separate lists per dungeon and length ([ruins short] ...);
+                     other dungeons use the [default] list.
   * Sets and lineups are saved separately for each estate (save slot).
   * Enable / disable it in the in-game mod list like any other mod.
 

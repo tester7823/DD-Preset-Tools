@@ -1,5 +1,6 @@
 # ---------------------------------------------------------------
 #  Auto Buy list  (the [Auto Buy] button on the Provision screen)
+#  자동 구매 목록  (원정 준비 화면의 [자동 구매] 버튼)
 # ---------------------------------------------------------------
 #  Items are bought from top to bottom.
 #  Buying stops as soon as you run out of gold.
@@ -11,14 +12,28 @@
 #  Item names:
 #    food  torch  shovel  key  antivenom  bandage  herbs
 #    holy water  laudanum  firewood  dog treats
+#    (Korean names also work: 식량 횃불 삽 열쇠 해독제 붕대 약초 성수 아편 장작 개 간식)
 #    (game IDs also work: provision, skeleton_key, medicinal_herbs ...)
 #    (items from other mods:  type:id  e.g.  supply:my_item  2)
 #
+#  Per-dungeon lists:
+#    The mod checks which expedition you picked and uses the matching
+#    [dungeon length] list below. If there is no matching list
+#    (Darkest Dungeon, Farmstead, Courtyard, mod dungeons ...),
+#    the [default] list is used.
+#      dungeon: ruins  warrens  weald  cove   (or 폐허 사육장 삼림 해안)
+#               other dungeons: their game ID, e.g. [farmstead short]
+#      length : short  medium  long           (or 짧음 중간 긺)
+#    던전별 목록: 고른 원정에 맞는 [던전 길이] 목록을 사용하고,
+#    맞는 목록이 없으면 (가장 어두운 던전, 농장, 안뜰, 모드 던전 등) [default] 목록을 사용합니다.
+#
 #  Items that cost shards are never bought.
-#  Adjust the amounts for your difficulty and dungeon.
 #  Changes apply immediately after saving this file.
+#  Per-dungeon amounts: based on the guide at
+#  https://gall.dcinside.com/mgallery/board/view/?id=darkest&no=2259
 # ---------------------------------------------------------------
 
+[default]   # 기본 (맞는 목록이 없을 때)
 food        all
 torch       all
 shovel      4
@@ -28,3 +43,111 @@ bandage     6
 herbs       6
 holy water  3
 laudanum    3
+
+[ruins short]   # 폐허 짧음
+food        all
+torch       12
+shovel      3
+key         2
+holy water  3
+herbs       2
+
+[ruins medium]   # 폐허 중간
+food        all
+torch       18
+shovel      4
+key         4
+holy water  4
+herbs       3
+
+[ruins long]   # 폐허 긺
+food        all
+torch       26
+shovel      5
+key         5
+holy water  5
+herbs       3
+
+[warrens short]   # 사육장 짧음
+food        all
+torch       12
+shovel      3
+key         2
+holy water  3
+herbs       2
+bandage     3
+
+[warrens medium]   # 사육장 중간
+food        all
+torch       18
+shovel      4
+key         3
+holy water  4
+herbs       3
+bandage     4
+antivenom   2
+
+[warrens long]   # 사육장 긺
+food        all
+torch       26
+shovel      5
+key         4
+holy water  5
+herbs       3
+bandage     5
+
+[weald short]   # 삼림 짧음
+food        all
+torch       12
+shovel      5
+key         3
+holy water  1
+herbs       2
+bandage     3
+antivenom   3
+
+[weald medium]   # 삼림 중간
+food        all
+torch       18
+shovel      6
+key         4
+holy water  2
+herbs       2
+bandage     4
+antivenom   4
+
+[weald long]   # 삼림 긺
+food        all
+torch       26
+shovel      6
+key         5
+holy water  3
+herbs       3
+bandage     6
+antivenom   6
+
+[cove short]   # 해안 짧음
+food        all
+torch       12
+shovel      4
+key         2
+holy water  1
+herbs       4
+
+[cove medium]   # 해안 중간
+food        all
+torch       18
+shovel      6
+key         4
+holy water  2
+herbs       6
+bandage     3
+
+[cove long]   # 해안 긺
+food        all
+torch       26
+shovel      7
+key         4
+holy water  3
+herbs       7
+bandage     4
