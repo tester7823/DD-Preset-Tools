@@ -43,7 +43,7 @@ void ReportSet(const char* key, const char* fmt, ...) {
     }
 }
 void ReportWrite(const char* why) {
-    char line[1600]; int n = snprintf(line, sizeof line, "DDPT-REPORT v0.9b-mac (2026-11-03) %s", why);
+    char line[1600]; int n = snprintf(line, sizeof line, "DDPT-REPORT v0.9d-mac (2026-11-09) %s", why);
     pthread_mutex_lock(&g_logLock);
     for (int i = 0; i < 9; ++i) if (g_rep[i][0] && n < (int)sizeof line - 1)
         n += snprintf(line + n, sizeof line - n, " | %s=%s", kReportKeys[i], g_rep[i]);

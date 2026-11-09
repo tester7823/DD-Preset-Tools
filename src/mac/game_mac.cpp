@@ -913,13 +913,45 @@ std::vector<BuyTarget> DefaultPlan() {
              { "supply", "skeleton_key", u8"열쇠", 6 }, { "supply", "antivenom", u8"해독제", 6 }, { "supply", "bandage", u8"붕대", 6 },
              { "supply", "medicinal_herbs", u8"약초", 6 }, { "supply", "holy_water", u8"성수", 3 }, { "supply", "laudanum", u8"아편", 3 } };
 }
+// 지금 고른 원정의 던전/길이 (원정 준비 화면에서). 못 읽으면 false
+bool SelectedQuestImpl(std::string& dungeon, int& length);
+
+// 설정 파일의 [던전 길이] 칸 이름 → 게임 ID / 길이 숫자
+std::string DungeonKey(std::string s) {
+    for (auto& ch : s) ch = (char)tolower((unsigned char)ch);
+    static const char* kMap[][2] = {
+        { "ruins", "crypts" }, { "crypts", "crypts" }, { u8"폐허", "crypts" },
+        { "warrens", "warrens" }, { u8"사육장", "warrens" },
+        { "weald", "weald" }, { u8"삼림", "weald" }, { u8"삼림지대", "weald" },
+        { "cove", "cove" }, { u8"해안", "cove" }, { u8"해안만", "cove" }, { u8"만", "cove" },
+        { "darkest", "darkestdungeon" }, { "darkestdungeon", "darkestdungeon" }, { u8"가장어두운던전", "darkestdungeon" },
+        { "farmstead", "farmstead" }, { u8"농장", "farmstead" }, { "courtyard", "courtyard" }, { u8"안뜰", "courtyard" },
+    };
+    for (auto& m : kMap) if (s == m[0]) return m[1];
+    return s;     // 모드 던전은 게임 ID 그대로
+}
+int LengthKey(std::string s) {
+    for (auto& ch : s) ch = (char)tolower((unsigned char)ch);
+    if (s == "short" || s == u8"짧음" || s == "1") return 1;
+    if (s == "medium" || s == u8"중간" || s == "2") return 2;
+    if (s == "long" || s == u8"긺" || s == u8"김" || s == u8"길음" || s == "3") return 3;
+    return 0;
+}
+
+// 한 줄: "<이름> <개수>"  이름 = 한국어 이름 / 영어 ID / 종류:ID,  개수 = 숫자 또는 전부/all
+// [ruins short] 같은 칸이 있으면 지금 고른 원정에 맞는 칸을 쓰고, 없으면 칸 밖(또는 [default])의 기본 목록을 씀
+std::string g_planLabel;     // 지금 쓰는 칸 (예: "crypts|2"), 기본이면 비어 있음
 std::vector<BuyTarget> LoadBuyPlan() {
+    g_planLabel.clear();
     const std::wstring& tr = Gfx::ToolRoot();
     if (tr.empty()) return DefaultPlan();
     std::string txt = Gfx::ReadFile(tr + L"\\autobuy.txt");
     if (txt.empty()) return DefaultPlan();
-    if (txt.size() >= 3 && (unsigned char)txt[0] == 0xEF) txt = txt.substr(3);
-    std::vector<BuyTarget> plan;
+    if (txt.size() >= 3 && (unsigned char)txt[0] == 0xEF) txt = txt.substr(3);   // UTF-8 BOM
+    std::string qd; int ql = 0;
+    bool haveQuest = SelectedQuestImpl(qd, ql);
+    std::vector<BuyTarget> plan, match;
+    bool inMatch = false, inDefault = true, matched = false;
     size_t pos = 0;
     while (pos < txt.size()) {
         size_t e = txt.find('\n', pos); if (e == std::string::npos) e = txt.size();
@@ -928,6 +960,22 @@ std::vector<BuyTarget> LoadBuyPlan() {
         while (!line.empty() && (line.back() == '\r' || line.back() == ' ' || line.back() == '\t')) line.pop_back();
         size_t s0 = line.find_first_not_of(" \t"); if (s0 == std::string::npos) continue;
         line = line.substr(s0);
+        if (line[0] == '[') {                       // 칸 시작
+            size_t z = line.find(']');
+            std::string head = line.substr(1, (z == std::string::npos ? line.size() : z) - 1);
+            for (auto& ch : head) if (ch == '\t' || ch == '_' || ch == '-' || ch == ',') ch = ' ';
+            std::string a = head, b;
+            size_t sp = head.find_last_of(' ');
+            if (sp != std::string::npos) { a = head.substr(0, sp); b = head.substr(sp + 1); }
+            while (!a.empty() && a.back() == ' ') a.pop_back();
+            while (!a.empty() && a.front() == ' ') a.erase(0, 1);
+            std::string la = a; for (auto& ch : la) ch = (char)tolower((unsigned char)ch);
+            inDefault = (la == "default" || a == u8"기본" || la == "all");
+            inMatch = !inDefault && haveQuest && DungeonKey(a) == qd && LengthKey(b) == ql;
+            if (inMatch) matched = true;
+            continue;
+        }
+        if (!inDefault && !inMatch) continue;
         size_t sp = line.find_last_of(" \t"); if (sp == std::string::npos) continue;
         std::string name = line.substr(0, sp), cnt = line.substr(sp + 1);
         while (!name.empty() && (name.back() == ' ' || name.back() == '\t')) name.pop_back();
@@ -945,8 +993,15 @@ std::vector<BuyTarget> LoadBuyPlan() {
             if (c != std::string::npos) { t.type = name.substr(0, c); t.id = name.substr(c + 1); }
             else { t.type = "supply"; t.id = name; }
         }
-        plan.push_back(t);
+        (inMatch ? match : plan).push_back(t);
     }
+    std::string key = haveQuest ? qd + "|" + std::to_string(ql) : std::string("?");
+    static std::string lastKey = "-";
+    if (key != lastKey) {
+        lastKey = key;
+        Log("자동 구매 목록: 원정 %s 길이 %d → %s", haveQuest ? qd.c_str() : "?", ql, matched && !match.empty() ? u8"던전별 목록" : u8"기본 목록");
+    }
+    if (matched && !match.empty()) { g_planLabel = key; return match; }
     if (plan.empty()) return DefaultPlan();
     return plan;
 }
@@ -1030,10 +1085,38 @@ BulkBuyResult BulkBuyProvisions() {
     Log("자동 구매: %d개, %d 골드%s%s", r.bought, r.spent, r.outOfGold ? u8" (골드 부족으로 중단)" : "", r.bagFull ? u8" (가방 가득)" : "");
     return r;
 }
+bool SelectedQuestImpl(std::string& dungeon, int& length) {
+    if (!g_ok) return false;
+    uint8_t* c = Campaign(); if (!c) return false;
+    uint8_t* qs = c + 0x11B0;                    // Quest::System
+    if (!Readable(qs, 0xB0)) return false;
+    int idx = *(int*)(qs + 0x28);                // 고른 원정 번호
+    uint8_t* b = *(uint8_t**)(qs + 0x10); uint8_t* e = *(uint8_t**)(qs + 0x18);
+    size_t n = (b && e > b && (size_t)(e - b) % (size_t)0x300 == 0) ? (size_t)(e - b) / (size_t)0x300 : 0;
+    uint8_t* q = nullptr;
+    if (idx >= 0 && (size_t)idx < n) q = b + (size_t)idx * (size_t)0x300;
+    else if (idx == *(int*)qs) q = qs + 0xA0;    // 특별 원정
+    if (!q || !Readable(q + 0x110, 0x10)) return false;
+    uint8_t* dc = *(uint8_t**)(q + 0x110);             // DungeonClass* (+0 이름)
+    if (!dc || !Readable(dc, 0x40)) return false;
+    dungeon.assign((const char*)dc, strnlen((const char*)dc, 0x40));
+    length = *(int*)(q + 0x11C);
+    return !dungeon.empty() && length >= 1 && length <= 9;
+}
+
 std::string BuyPlanText() {
     std::string s;
-    for (auto& t : LoadBuyPlan()) {
-        if (!s.empty()) s += ", ";
+    auto plan = LoadBuyPlan();
+    if (!g_planLabel.empty()) {            // 던전별 목록이면 "폐허 · 중간: " 을 앞에
+        size_t bar = g_planLabel.find('|');
+        std::string d = g_planLabel.substr(0, bar), l = g_planLabel.substr(bar + 1);
+        std::string dn = LocalizeImpl("dungeon_name_" + d), ln = LocalizeImpl("town_quest_length_" + l);
+        s = (dn.empty() ? d : dn) + (ln.empty() ? "" : " · " + ln) + ": ";
+    }
+    bool first = true;
+    for (auto& t : plan) {
+        if (!first) s += ", ";
+        first = false;
         std::string name = LocalizeImpl("str_inventory_title_" + t.type + t.id);
         if (name.empty()) name = t.label;
         s += name + " " + (t.count < 0 ? std::string(Txt::T("buy_all")) : Txt::F("buy_count", { std::to_string(t.count) }));
